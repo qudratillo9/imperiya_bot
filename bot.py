@@ -69,7 +69,7 @@ CANDIDATES = [
     "Abduqahhorov Diyorbek",
     "Ibragimov Sodiqjon",
     "Abduraxmonova Arofat",
-    "Nematillayev Jahongir",
+    
 ]
 
 logging.basicConfig(
