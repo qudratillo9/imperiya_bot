@@ -905,6 +905,77 @@ async def admin_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ADMIN BUYRUQLARI
 # =========================================================
 
+async def restorevotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Admin uchun o‘chirilgan ovozlarni qayta tiklash.
+    Ishlatilishi:
+    /restorevotes USER_ID CANDIDATE_INDEX COUNT
+    Masalan:
+    /restorevotes 123456789 1 5
+    """
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Sizda admin huquqi mavjud emas.")
+        return
+
+    try:
+        user_id = int(context.args[0])
+        candidate_index = int(context.args[1]) - 1
+        count = int(context.args[2])
+
+        if count < 1:
+            raise ValueError
+
+        candidate = CANDIDATES[candidate_index]
+    except (IndexError, ValueError):
+        await update.message.reply_text(
+            "❌ Buyruq noto‘g‘ri.\n\n"
+            "Foydalanish:\n"
+            "/restorevotes USER_ID NOMZOD_RAQAMI OVOZ_SONI\n\n"
+            "Masalan:\n"
+            "/restorevotes 123456789 1 5\n\n"
+            "Nomzodlar:\n"
+            + "\n".join(
+                f"{i}. {name}" for i, name in enumerate(CANDIDATES, 1)
+            )
+        )
+        return
+
+    user = get_user(user_id)
+    if not user:
+        await update.message.reply_text(
+            f"❌ {user_id} ID li foydalanuvchi bazadan topilmadi."
+        )
+        return
+
+    now = datetime.now().isoformat()
+
+    # Bu ovozlar foydalanuvchining oddiy ovoz limitini kamaytirmaydi.
+    # Ular admin tomonidan qayta tiklangan ovoz sifatida yoziladi.
+    for _ in range(count):
+        execute(
+            "INSERT INTO votes (user_id, candidate, vote_type, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (user_id, candidate, "admin_restore", now),
+        )
+
+    commit()
+
+    total = fetchone(
+        "SELECT COUNT(*) AS n FROM votes WHERE candidate = ?",
+        (candidate,),
+    )["n"]
+
+    await update.message.reply_text(
+        "✅ <b>Ovozlar qayta tiklandi!</b>\n\n"
+        f"👤 Foydalanuvchi: <code>{user_id}</code>\n"
+        f"🏆 Nomzod: <b>{esc(candidate)}</b>\n"
+        f"➕ Tiklangan ovoz: <b>{count} ta</b>\n"
+        f"📊 Nomzodning jami ovozi: <b>{total} ta</b>\n\n"
+        "ℹ️ Bu ovozlar <code>admin_restore</code> sifatida saqlandi.",
+        parse_mode=ParseMode.HTML,
+    )
+
+
 async def setdays_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -973,6 +1044,7 @@ async def post_init(application: Application):
         BotCommand("start", "Konkursni boshlash"),
         BotCommand("referral", "Referral havolam"),
         BotCommand("timeleft", "Qolgan vaqt"),
+        BotCommand("restorevotes", "Admin: ovozlarni tiklash"),
         BotCommand("help", "Yordam"),
     ])
 
@@ -1016,6 +1088,7 @@ def main():
         ("timeleft", timeleft_command),
         ("admin", admin_command),
         ("setdays", setdays_command),
+        ("restorevotes", restorevotes_command),
         ("extend", extend_command),
         ("restart", restart_command),
     ]:
