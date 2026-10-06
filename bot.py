@@ -6,6 +6,7 @@ Render uchun:
 - DATABASE_URL environment variable (Render PostgreSQL Internal Database URL)
 """
 
+import asyncio
 import html
 import logging
 import os
@@ -19,7 +20,7 @@ from psycopg2.extras import RealDictCursor
 
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 
 # =========================================================
@@ -409,6 +410,7 @@ def admin_keyboard():
         [InlineKeyboardButton("🏆 Natijalar", callback_data="admin_results")],
         [InlineKeyboardButton("👥 Ovoz berganlar", callback_data="admin_voters")],
         [InlineKeyboardButton("🎁 Referral statistikasi", callback_data="admin_referrals")],
+        [InlineKeyboardButton("📢 Barchaga xabar yuborish", callback_data="admin_broadcast")],
         [InlineKeyboardButton("🔄 Yangilash", callback_data="admin_panel")],
     ])
 
@@ -876,6 +878,87 @@ async def admin_voters(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await edit(query, text, admin_keyboard())
 
 
+async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin uchun barcha /start qilgan foydalanuvchilarga xabar yuborish rejimini yoqadi."""
+    query = update.callback_query
+    if not await _admin_only(query):
+        return
+
+    context.user_data["awaiting_broadcast"] = True
+    await edit(
+        query,
+        "📢 <b>BARCHAGA XABAR YUBORISH</b>\n\n"
+        "Yubormoqchi bo‘lgan xabaringizni shu yerga yuboring.\n"
+        "Matn, rasm, video yoki boshqa Telegram xabarlarini yuborishingiz mumkin.\n\n"
+        "❌ Bekor qilish uchun /cancel buyrug‘ini yuboring.",
+    )
+
+
+async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Broadcast rejimini bekor qiladi."""
+    if not is_admin(update.effective_user.id):
+        return
+
+    context.user_data.pop("awaiting_broadcast", None)
+    await update.message.reply_text(
+        "❌ <b>Broadcast bekor qilindi.</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_keyboard(),
+    )
+
+
+async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin yuborgan xabarni barcha bazadagi foydalanuvchilarga nusxalaydi."""
+    if not is_admin(update.effective_user.id):
+        return
+
+    if not context.user_data.get("awaiting_broadcast"):
+        return
+
+    message = update.message
+    if not message:
+        return
+
+    context.user_data.pop("awaiting_broadcast", None)
+
+    users = fetchall("SELECT user_id FROM users ORDER BY user_id")
+    total = len(users)
+    success = 0
+    failed = 0
+
+    status_message = await message.reply_text(
+        "⏳ <b>Xabar yuborilmoqda...</b>\n\n"
+        f"👥 Jami foydalanuvchilar: <b>{total}</b>",
+        parse_mode=ParseMode.HTML,
+    )
+
+    for row in users:
+        user_id = row["user_id"]
+        try:
+            await context.bot.copy_message(
+                chat_id=user_id,
+                from_chat_id=message.chat_id,
+                message_id=message.message_id,
+            )
+            success += 1
+            # Telegram flood limitiga yaqinlashmaslik uchun kichik pauza.
+            await asyncio.sleep(0.04)
+        except Exception as e:
+            failed += 1
+            log.warning("Broadcast %s ID ga yuborilmadi: %s", user_id, e)
+
+    await status_message.edit_text(
+        "📢 <b>BROADCAST YAKUNLANDI</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 Jami: <b>{total}</b>\n"
+        f"✅ Yetkazildi: <b>{success}</b>\n"
+        f"❌ Yetkazilmadi: <b>{failed}</b>\n\n"
+        "Admin panelga qaytishingiz mumkin.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_keyboard(),
+    )
+
+
 async def admin_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not await _admin_only(query):
@@ -1091,8 +1174,12 @@ def main():
         ("restorevotes", restorevotes_command),
         ("extend", extend_command),
         ("restart", restart_command),
+        ("cancel", cancel_broadcast),
     ]:
         app.add_handler(CommandHandler(name, handler))
+
+    # Faqat admin broadcast rejimida yuborgan oddiy xabarlarni qabul qiladi.
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, broadcast_message))
 
     for pattern, handler in [
         (r"^check_subscription$", check_subscription),
@@ -1108,6 +1195,7 @@ def main():
         (r"^admin_results$", admin_results),
         (r"^admin_voters$", admin_voters),
         (r"^admin_referrals$", admin_referrals),
+        (r"^admin_broadcast$", admin_broadcast),
     ]:
         app.add_handler(CallbackQueryHandler(handler, pattern=pattern))
 
