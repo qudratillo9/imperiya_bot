@@ -34,41 +34,41 @@ if not BOT_TOKEN:
 CHANNEL_USERNAME = "@imperiya_edu"
 CHANNEL_LINK = "https://t.me/imperiya_edu"
 INSTAGRAM_LINK = "https://www.instagram.com/imperiya_edu/"
+INSTAGRAM_LINK = "https://www.instagram.com/komfort.mebellari?cplk=MXYxczJxc3RibTdjNw=="
+INSTAGRAM_LINK = "https://www.instagram.com/komfort.mebellari?obrf=MXYxczJxc3RibTdjNw=="
+CHANNEL_LINK = "https://t.me/qogay_online_rasmiy"
 
 ADMIN_ID = 7050215692
-DEFAULT_CONTEST_DAYS = int(os.getenv("CONTEST_DAYS", "10"))
+DEFAULT_CONTEST_DAYS = int(os.getenv("CONTEST_DAYS", "7"))
 REFERRALS_PER_BONUS = 5
 
 PRIZES = [
-    ("🥇", "1-o‘rin", "Smart TV"),
-    ("🥈", "2-o‘rin", "Tefal"),
-    ("🥉", "3-o‘rin", "Choper"),
+    ("🥇", "1-o‘rin", "Kondisioner"),
+    ("🥈", "2-o‘rin", "Televizor"),
+    ("🥉", "3-o‘rin", "Kuller"),
 ]
 
 CANDIDATES = [
-    "Sardorbek Axmadjonov",
-    "Davron Axmedov",
-    "Barchinoy Aliboyeva",
-    "Muhammadqodir Erkinboyev",
-    "Feruza G‘aybullayeva",
-    "Nozima Hakimova",
-    "Leniyara Menaliyeva",
-    "Xurshidabonu Muhammadjanova",
-    "Diyorbek Eraliyev",
-    "Jahongir Ne'matillayev",
-    "Husanboy Ergashev",
-    "Sevara Tursunboyeva",
-    "Sardorbek O'rmonov",
-    "Azimova Feruza",
-    "Shohsanam Otamirzayeva",
-    "Gulrux Hoshimjonova",
-    "Shoxsanam Mirzayeva",
-    "Hakima G'aniyeva",
-    "Shaxnoza Abdug'aniyeva",
-    "Xojiakbar Yo‘ldashev",
-    "Diyorbek Abduqahhorov",
-    "Sodiqjon Ibragimov",
-    "Arofat Abdurahmonova",
+    "3-Maktab",
+    "12-Maktab",
+    "15-Maktab",
+    "16-Maktab",
+    "17-Maktab",
+    "18-Maktab",
+    "19-Maktab",
+    "20-Maktab",
+    "21-Maktab",
+    "22-Maktab",
+    "23-Maktab",
+    "24-Maktab",
+    "25-Maktab",
+    "26-Maktab",
+    "27-Maktab",
+    "32-Maktab",
+    "33-Maktab",
+    "36-Maktab",
+    "41-Maktab",
+    "44-Maktab",
 ]
 
 logging.basicConfig(
@@ -483,7 +483,7 @@ async def process_referral(user_id: int, context: ContextTypes.DEFAULT_TYPE):
 # START / OBUNA
 # =========================================================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+15 kun
     user = update.effective_user
     save_user(user)
 
