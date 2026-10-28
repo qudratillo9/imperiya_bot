@@ -4,6 +4,7 @@ IMPERIYA — "Imperiyaning eng sodiq xodimi" konkurs boti
 Render uchun:
 - BOT_TOKEN environment variable
 - DATABASE_URL environment variable (Render PostgreSQL Internal Database URL)
+- ixtiyoriy: ADMIN_ID, CONTEST_DAYS
 """
 
 import asyncio
@@ -20,7 +21,54 @@ from psycopg2.extras import RealDictCursor
 
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+
+
+# =========================================================
+# LOGGING
+# =========================================================
+
+logging.basicConfig(
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    level=logging.INFO,
+)
+log = logging.getLogger("imperiya-bot")
+
+
+# =========================================================
+# RENDER PORT HEALTH SERVER (eng birinchi ishga tushadi)
+# =========================================================
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"IMPERIYA BOT OK")
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, format, *args):
+        return
+
+
+def start_health_server():
+    port = int(os.getenv("PORT", "10000"))
+    server = ThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
+    log.info("Health server portda ishga tushdi: %s", port)
+    server.serve_forever()
+
+
+threading.Thread(target=start_health_server, daemon=True).start()
 
 
 # =========================================================
@@ -31,15 +79,11 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable topilmadi.")
 
-CHANNEL_USERNAME = "@imperiya_edu"
-CHANNEL_LINK = "https://t.me/imperiya_edu"
-INSTAGRAM_LINK = "https://www.instagram.com/imperiya_edu/"
-INSTAGRAM_LINK = "https://www.instagram.com/komfort.mebellari?cplk=MXYxczJxc3RibTdjNw=="
-INSTAGRAM_LINK = "https://www.instagram.com/komfort.mebellari?obrf=MXYxczJxc3RibTdjNw=="
 CHANNEL_USERNAME = "@qogay_online_rasmiy"
 CHANNEL_LINK = "https://t.me/qogay_online_rasmiy"
+INSTAGRAM_LINK = "https://www.instagram.com/komfort.mebellari?obrf=MXYxczJxc3RibTdjNw=="
 
-ADMIN_ID = 7050215692
+ADMIN_ID = int(os.getenv("ADMIN_ID", "7050215692"))
 DEFAULT_CONTEST_DAYS = int(os.getenv("CONTEST_DAYS", "7"))
 REFERRALS_PER_BONUS = 5
 
@@ -72,12 +116,6 @@ CANDIDATES = [
     "44-Maktab",
 ]
 
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    level=logging.INFO,
-)
-log = logging.getLogger("imperiya-bot")
-
 
 # =========================================================
 # DATABASE
@@ -94,9 +132,9 @@ if not DATABASE_URL:
     cursor = db.cursor()
     DB_KIND = "sqlite"
 else:
-    # Render PostgreSQL
-    db = psycopg2.connect(DATABASE_URL)
-    db.autocommit = False
+    # Render PostgreSQL. autocommit: hech qanday tranzaksiya qotib qolmaydi.
+    db = psycopg2.connect(DATABASE_URL, connect_timeout=15)
+    db.autocommit = True
     cursor = db.cursor(cursor_factory=RealDictCursor)
     DB_KIND = "postgres"
 
@@ -110,8 +148,10 @@ def execute(sql, params=()):
     try:
         cursor.execute(sql, params)
     except Exception:
-        if DB_KIND == "postgres":
+        try:
             db.rollback()
+        except Exception:
+            pass
         raise
     return cursor
 
@@ -125,12 +165,16 @@ def fetchall(sql, params=()):
 
 
 def commit():
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        log.warning("commit xatosi: %s", e)
 
 
 def init_database():
     if DB_KIND == "postgres":
-        cursor.execute("""
+        statements = [
+            """
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
                 first_name TEXT,
@@ -145,8 +189,8 @@ def init_database():
                 main_vote_used INTEGER DEFAULT 0,
                 created_at TEXT
             )
-        """)
-        cursor.execute("""
+            """,
+            """
             CREATE TABLE IF NOT EXISTS votes (
                 vote_id BIGSERIAL PRIMARY KEY,
                 user_id BIGINT NOT NULL,
@@ -154,25 +198,28 @@ def init_database():
                 vote_type TEXT NOT NULL,
                 created_at TEXT
             )
-        """)
-        cursor.execute("""
+            """,
+            """
             CREATE TABLE IF NOT EXISTS referral_done (
                 user_id BIGINT PRIMARY KEY,
                 created_at TEXT
             )
-        """)
-        cursor.execute("""
+            """,
+            """
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT
             )
-        """)
-        # Eski PostgreSQL bazalari uchun ustunlarni tekshirish
-        cursor.execute("""
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS bonus_granted INTEGER DEFAULT 0
-        """)
-        commit()
+            """,
+        ]
+        for stmt in statements:
+            cursor.execute(stmt)
+        try:
+            cursor.execute(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS bonus_granted INTEGER DEFAULT 0"
+            )
+        except Exception as e:
+            log.warning("ALTER TABLE o‘tkazib yuborildi: %s", e)
     else:
         cursor.executescript("""
             CREATE TABLE IF NOT EXISTS users (
@@ -212,7 +259,7 @@ def init_database():
                 "UPDATE users SET bonus_granted = points / ?",
                 (REFERRALS_PER_BONUS,),
             )
-        commit()
+    commit()
 
 
 init_database()
@@ -228,22 +275,13 @@ def get_setting(key: str, default=None):
 
 
 def set_setting(key: str, value: str):
-    if DB_KIND == "postgres":
-        execute(
-            """
-            INSERT INTO settings (key, value) VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value
-            """,
-            (key, value),
-        )
-    else:
-        execute(
-            """
-            INSERT INTO settings (key, value) VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            """,
-            (key, value),
-        )
+    execute(
+        """
+        INSERT INTO settings (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value
+        """,
+        (key, value),
+    )
     commit()
 
 
@@ -366,6 +404,10 @@ def leaderboard_text(title: str = "📈 REYTING") -> str:
     return "\n".join(lines)
 
 
+def votes_available(row) -> int:
+    return (0 if row["main_vote_used"] else 1) + row["bonus_votes"]
+
+
 # =========================================================
 # KLAVIATURALAR
 # =========================================================
@@ -393,10 +435,7 @@ def candidate_keyboard():
     rows = []
     for i in range(0, len(CANDIDATES), 2):
         rows.append([
-            InlineKeyboardButton(
-                f"👤 {CANDIDATES[j]}",
-                callback_data=f"vote_{j}"
-            )
+            InlineKeyboardButton(f"👤 {CANDIDATES[j]}", callback_data=f"vote_{j}")
             for j in range(i, min(i + 2, len(CANDIDATES)))
         ])
     rows.append([InlineKeyboardButton("⬅️ Orqaga", callback_data="back_main")])
@@ -430,7 +469,8 @@ async def edit(query, text: str, keyboard=None):
             disable_web_page_preview=True,
         )
     except Exception as e:
-        log.debug("edit xatosi: %s", e)
+        if "not modified" not in str(e).lower():
+            log.warning("edit xatosi: %s", e)
 
 
 # =========================================================
@@ -540,11 +580,10 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     telegram_ok = False
     try:
-        member = await context.bot.get_chat_member(
-            chat_id=CHANNEL_USERNAME,
-            user_id=user_id
+        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        telegram_ok = member.status in ("member", "administrator", "creator") or (
+            member.status == "restricted" and getattr(member, "is_member", False)
         )
-        telegram_ok = member.status in ("member", "administrator", "creator")
     except Exception as e:
         log.warning("Telegram obuna tekshiruvi xatosi: %s", e)
 
@@ -575,10 +614,6 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # OVOZ BERISH
 # =========================================================
 
-def votes_available(row) -> int:
-    return (0 if row["main_vote_used"] else 1) + row["bonus_votes"]
-
-
 async def _guard(query) -> bool:
     if not contest_active():
         await edit(query, "⛔ <b>Konkurs yakunlangan.</b>")
@@ -607,7 +642,7 @@ async def show_candidates(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit(
             query,
             "ℹ️ <b>Sizning ovozlaringiz tugagan.</b>\n\n"
-            f"Qo‘shimcha ovoz olish uchun do‘stlaringizni taklif qiling: "
+            "Qo‘shimcha ovoz olish uchun do‘stlaringizni taklif qiling: "
             f"har {REFERRALS_PER_BONUS} ta referral = 1 ovoz.",
             main_menu_keyboard(),
         )
@@ -660,16 +695,27 @@ async def vote_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("❌ Nomzod topilmadi.", show_alert=True)
         return
 
-    row = get_user(user_id)
-
-    if row["main_vote_used"] == 0:
+    # Shartli UPDATE: qayta bosilsa ham bitta ovoz ketadi.
+    vote_type = None
+    if execute(
+        "UPDATE users SET main_vote_used = 1 WHERE user_id = ? AND main_vote_used = 0",
+        (user_id,),
+    ).rowcount == 1:
         vote_type = "main"
-        execute("UPDATE users SET main_vote_used = 1 WHERE user_id = ?", (user_id,))
-    elif row["bonus_votes"] > 0:
+    elif execute(
+        "UPDATE users SET bonus_votes = bonus_votes - 1 WHERE user_id = ? AND bonus_votes > 0",
+        (user_id,),
+    ).rowcount == 1:
         vote_type = "bonus"
-        execute("UPDATE users SET bonus_votes = bonus_votes - 1 WHERE user_id = ?", (user_id,))
-    else:
+
+    if vote_type is None:
+        commit()
         await query.answer("❌ Sizda ovoz qolmagan.", show_alert=True)
+        await edit(
+            query,
+            "ℹ️ <b>Sizning ovozlaringiz tugagan.</b>",
+            main_menu_keyboard(),
+        )
         return
 
     execute(
@@ -679,7 +725,7 @@ async def vote_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     commit()
 
     counts = vote_counts()
-    rank = next(i for i, (n, _) in enumerate(counts, 1) if n == candidate)
+    rank = next(i for i, (name, _) in enumerate(counts, 1) if name == candidate)
     votes_now = dict(counts)[candidate]
 
     row = get_user(user_id)
@@ -779,7 +825,7 @@ async def back_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================================================
-# ADMIN
+# ADMIN PANEL
 # =========================================================
 
 async def _admin_only(query) -> bool:
@@ -816,9 +862,6 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not await _admin_only(query):
         return
-
-    def one(sql):
-        return fetchone(sql)[0 if DB_KIND == "sqlite" else "count"] if False else fetchone(sql)
 
     users = fetchone("SELECT COUNT(*) AS n FROM users")["n"]
     subs = fetchone("SELECT COUNT(*) AS n FROM users WHERE subscribed = 1")["n"]
@@ -884,8 +927,36 @@ async def admin_voters(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await edit(query, text, admin_keyboard())
 
 
+async def admin_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not await _admin_only(query):
+        return
+
+    rows = fetchall("""
+        SELECT user_id, first_name, username, referral_count, points, bonus_votes
+        FROM users WHERE referral_count > 0
+        ORDER BY referral_count DESC LIMIT 20
+    """)
+
+    text = "🎁 <b>REFERRAL STATISTIKASI</b>\n\n"
+    if not rows:
+        text += "Hozircha referral mavjud emas."
+    for i, r in enumerate(rows, 1):
+        username = f"@{esc(r['username'])}" if r["username"] else "username yo‘q"
+        text += (
+            f"{i}. <b>{esc(r['first_name'] or 'Noma’lum')}</b> ({username})\n"
+            f"   🆔 <code>{r['user_id']}</code>\n"
+            f"   👥 {r['referral_count']} • ⭐ {r['points']} • 🎁 {r['bonus_votes']}\n\n"
+        )
+
+    await edit(query, text, admin_keyboard())
+
+
+# =========================================================
+# BROADCAST
+# =========================================================
+
 async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin uchun barcha /start qilgan foydalanuvchilarga xabar yuborish rejimini yoqadi."""
     query = update.callback_query
     if not await _admin_only(query):
         return
@@ -901,7 +972,6 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Broadcast rejimini bekor qiladi."""
     if not is_admin(update.effective_user.id):
         return
 
@@ -914,10 +984,8 @@ async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin yuborgan xabarni barcha bazadagi foydalanuvchilarga nusxalaydi."""
     if not is_admin(update.effective_user.id):
         return
-
     if not context.user_data.get("awaiting_broadcast"):
         return
 
@@ -947,8 +1015,7 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message_id=message.message_id,
             )
             success += 1
-            # Telegram flood limitiga yaqinlashmaslik uchun kichik pauza.
-            await asyncio.sleep(0.04)
+            await asyncio.sleep(0.04)  # flood limitdan saqlanish
         except Exception as e:
             failed += 1
             log.warning("Broadcast %s ID ga yuborilmadi: %s", user_id, e)
@@ -965,42 +1032,14 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def admin_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if not await _admin_only(query):
-        return
-
-    rows = fetchall("""
-        SELECT user_id, first_name, username, referral_count, points, bonus_votes
-        FROM users WHERE referral_count > 0
-        ORDER BY referral_count DESC LIMIT 20
-    """)
-
-    text = "🎁 <b>REFERRAL STATISTIKASI</b>\n\n"
-    if not rows:
-        text += "Hozircha referral mavjud emas."
-    for i, r in enumerate(rows, 1):
-        username = f"@{esc(r['username'])}" if r["username"] else "username yo‘q"
-        text += (
-            f"{i}. <b>{esc(r['first_name'] or 'Noma’lum')}</b> ({username})\n"
-            f"   🆔 <code>{r['user_id']}</code>\n"
-            f"   👥 {r['referral_count']} • ⭐ {r['points']} • 🎁 {r['bonus_votes']}\n\n"
-        )
-
-    await edit(query, text, admin_keyboard())
-
-
 # =========================================================
 # ADMIN BUYRUQLARI
 # =========================================================
 
 async def restorevotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Admin uchun o‘chirilgan ovozlarni qayta tiklash.
-    Ishlatilishi:
-    /restorevotes USER_ID CANDIDATE_INDEX COUNT
-    Masalan:
-    /restorevotes 123456789 1 5
+    /restorevotes USER_ID NOMZOD_RAQAMI OVOZ_SONI
+    Masalan: /restorevotes 123456789 1 5
     """
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Sizda admin huquqi mavjud emas.")
@@ -1010,10 +1049,8 @@ async def restorevotes_command(update: Update, context: ContextTypes.DEFAULT_TYP
         user_id = int(context.args[0])
         candidate_index = int(context.args[1]) - 1
         count = int(context.args[2])
-
-        if count < 1:
+        if count < 1 or candidate_index < 0:
             raise ValueError
-
         candidate = CANDIDATES[candidate_index]
     except (IndexError, ValueError):
         await update.message.reply_text(
@@ -1023,36 +1060,23 @@ async def restorevotes_command(update: Update, context: ContextTypes.DEFAULT_TYP
             "Masalan:\n"
             "/restorevotes 123456789 1 5\n\n"
             "Nomzodlar:\n"
-            + "\n".join(
-                f"{i}. {name}" for i, name in enumerate(CANDIDATES, 1)
-            )
+            + "\n".join(f"{i}. {name}" for i, name in enumerate(CANDIDATES, 1))
         )
         return
 
-    user = get_user(user_id)
-    if not user:
-        await update.message.reply_text(
-            f"❌ {user_id} ID li foydalanuvchi bazadan topilmadi."
-        )
+    if not get_user(user_id):
+        await update.message.reply_text(f"❌ {user_id} ID li foydalanuvchi bazadan topilmadi.")
         return
 
     now = datetime.now().isoformat()
-
-    # Bu ovozlar foydalanuvchining oddiy ovoz limitini kamaytirmaydi.
-    # Ular admin tomonidan qayta tiklangan ovoz sifatida yoziladi.
     for _ in range(count):
         execute(
-            "INSERT INTO votes (user_id, candidate, vote_type, created_at) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO votes (user_id, candidate, vote_type, created_at) VALUES (?, ?, ?, ?)",
             (user_id, candidate, "admin_restore", now),
         )
-
     commit()
 
-    total = fetchone(
-        "SELECT COUNT(*) AS n FROM votes WHERE candidate = ?",
-        (candidate,),
-    )["n"]
+    total = fetchone("SELECT COUNT(*) AS n FROM votes WHERE candidate = ?", (candidate,))["n"]
 
     await update.message.reply_text(
         "✅ <b>Ovozlar qayta tiklandi!</b>\n\n"
@@ -1100,14 +1124,25 @@ async def extend_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/restart  yoki  /restart 15  (15 kunga qayta boshlash)"""
     if not is_admin(update.effective_user.id):
         return
+    if context.args:
+        try:
+            days = int(context.args[0])
+            if days < 1:
+                raise ValueError
+            set_setting("contest_days", str(days))
+        except ValueError:
+            await update.message.reply_text("Ishlatilishi: /restart 15")
+            return
     set_setting("contest_start", datetime.now().isoformat())
     await update.message.reply_text(
         f"🔄 Konkurs hozirdan qayta boshlandi ({contest_days()} kun).\n"
         f"⏱ Tugash: {contest_end().strftime('%d.%m.%Y %H:%M')}"
     )
-    
+
+
 async def resetvotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Hammasini noldan boshlash: ovozlar, referrallar, bonuslar o'chadi."""
     if not is_admin(update.effective_user.id):
@@ -1120,17 +1155,21 @@ async def resetvotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return
 
-    execute("DELETE FROM votes")
-    execute("DELETE FROM referral_done")
-    execute(
-        "UPDATE users SET main_vote_used = 0, bonus_votes = 0, "
-        "bonus_granted = 0, referral_count = 0, points = 0"
-    )
-    commit()
-    await update.message.reply_text("✅ Hammasi nolga tushirildi. Har kimda yana 1 ta ovoz bor.")
+    try:
+        execute("DELETE FROM votes")
+        execute("DELETE FROM referral_done")
+        execute(
+            "UPDATE users SET main_vote_used = 0, bonus_votes = 0, "
+            "bonus_granted = 0, referral_count = 0, points = 0"
+        )
+        commit()
+        await update.message.reply_text("✅ Hammasi nolga tushirildi. Har kimda yana 1 ta ovoz bor.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Xato: {e}")
 
 
 async def newround_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Eski ovozlar reytingda qoladi, hammaga yangi 1 ta asosiy ovoz beriladi."""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Siz admin emassiz.")
         return
@@ -1141,6 +1180,26 @@ async def newround_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ {n} ta foydalanuvchiga yangi ovoz berildi.")
     except Exception as e:
         await update.message.reply_text(f"❌ Xato: {e}")
+
+
+async def myinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Tekshiruv uchun: o'z holatingizni ko'rsatadi."""
+    row = get_user(update.effective_user.id)
+    if not row:
+        await update.message.reply_text("Bazada topilmadingiz. /start bosing.")
+        return
+    await update.message.reply_text(
+        f"ID: {row['user_id']}\n"
+        f"admin: {is_admin(update.effective_user.id)}\n"
+        f"subscribed: {row['subscribed']}\n"
+        f"instagram_verified: {row['instagram_verified']}\n"
+        f"main_vote_used: {row['main_vote_used']}\n"
+        f"bonus_votes: {row['bonus_votes']}\n"
+        f"konkurs faol: {contest_active()}\n"
+        f"qolgan vaqt: {time_left_text()}\n"
+        f"baza: {DB_KIND}"
+    )
+
 
 async def timeleft_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⏳ Konkursning qolgan vaqti: {time_left_text()}")
@@ -1158,43 +1217,20 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    log.error("BOT ERROR: %r", context.error)
-    if DB_KIND == "postgres":
-        try:
-            db.rollback()
-        except Exception:
-            pass
+    log.error("BOT ERROR: %r", context.error, exc_info=context.error)
+    try:
+        db.rollback()
+    except Exception:
+        pass
+
 
 async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("start", "Konkursni boshlash"),
         BotCommand("referral", "Referral havolam"),
         BotCommand("timeleft", "Qolgan vaqt"),
-        BotCommand("restorevotes", "Admin: ovozlarni tiklash"),
         BotCommand("help", "Yordam"),
     ])
-
-
-# =========================================================
-# RENDER PORT HEALTH SERVER
-# =========================================================
-
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(b"IMPERIYA BOT OK")
-
-    def log_message(self, format, *args):
-        return
-
-
-def start_health_server():
-    port = int(os.getenv("PORT", "10000"))
-    server = ThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
-    log.info("Health server portda ishga tushdi: %s", port)
-    server.serve_forever()
 
 
 # =========================================================
@@ -1202,8 +1238,11 @@ def start_health_server():
 # =========================================================
 
 def main():
-    # Render Web Service port tekshiruvini o'tkazish uchun.
-    threading.Thread(target=start_health_server, daemon=True).start()
+    # Python 3.14 da event loop avtomatik yaratilmaydi.
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
 
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
@@ -1212,6 +1251,7 @@ def main():
         ("referral", referral_command),
         ("help", help_command),
         ("timeleft", timeleft_command),
+        ("myinfo", myinfo_command),
         ("admin", admin_command),
         ("setdays", setdays_command),
         ("restorevotes", restorevotes_command),
