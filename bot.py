@@ -84,11 +84,12 @@ if not BOT_TOKEN:
 # Yopiq kanal bo'lsa, username o'rniga raqamli ID yozing: -1001234567890
 REQUIRED_CHANNELS = [
     ("Kanal 1", "@qogay_online_rasmiy", "https://t.me/qogay_online_rasmiy"),
-    ("Kanal 2", "@KANAL_2_USERNAME", "https://t.me/KANAL_2_USERNAME"),
-    ("Kanal 3", "@KANAL_3_USERNAME", "https://t.me/KANAL_3_USERNAME"),
-    ("Kanal 4", "@KANAL_4_USERNAME", "https://t.me/KANAL_4_USERNAME"),
+    ("Kanal 2", "@imperiya_edu", "hhttps://t.me/imperiya_edu"),
 ]
 INSTAGRAM_LINK = "https://www.instagram.com/komfort.mebellari?obrf=MXYxczJxc3RibTdjNw=="
+INSTAGRAM_LINK = "INSTAGRAM_LINK = "https://www.instagram.com/komfort.mebellari?obrf=MXYxczJxc3RibTdjNw=="
+
+
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7050215692"))
 DEFAULT_CONTEST_DAYS = int(os.getenv("CONTEST_DAYS", "7"))
