@@ -489,7 +489,7 @@ async def process_referral(user_id: int, context: ContextTypes.DEFAULT_TYPE):
 # START / OBUNA
 # =========================================================
 
-15 kun
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     save_user(user)
 
