@@ -79,8 +79,15 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable topilmadi.")
 
-CHANNEL_USERNAME = "@qogay_online_rasmiy"
-CHANNEL_LINK = "https://t.me/qogay_online_rasmiy"
+# Majburiy kanallar: (tugmadagi nom, kanal username yoki ID, havola)
+# Bot HAR BIR kanalda ADMIN bo'lishi shart, aks holda obuna tekshirilmaydi.
+# Yopiq kanal bo'lsa, username o'rniga raqamli ID yozing: -1001234567890
+REQUIRED_CHANNELS = [
+    ("Kanal 1", "@qogay_online_rasmiy", "https://t.me/qogay_online_rasmiy"),
+    ("Kanal 2", "@KANAL_2_USERNAME", "https://t.me/KANAL_2_USERNAME"),
+    ("Kanal 3", "@KANAL_3_USERNAME", "https://t.me/KANAL_3_USERNAME"),
+    ("Kanal 4", "@KANAL_4_USERNAME", "https://t.me/KANAL_4_USERNAME"),
+]
 INSTAGRAM_LINK = "https://www.instagram.com/komfort.mebellari?obrf=MXYxczJxc3RibTdjNw=="
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7050215692"))
@@ -414,7 +421,10 @@ def votes_available(row) -> int:
 
 def requirements_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Telegram kanalga obuna bo‘lish", url=CHANNEL_LINK)],
+        *[
+            [InlineKeyboardButton(f"📢 {title} — obuna bo‘lish", url=link)]
+            for title, _chat, link in REQUIRED_CHANNELS
+        ],
         [InlineKeyboardButton("📸 Instagram sahifaga obuna bo‘lish", url=INSTAGRAM_LINK)],
         [InlineKeyboardButton("✅ Obunalarni tekshirish", callback_data="check_subscription")],
     ])
@@ -525,6 +535,23 @@ async def process_referral(user_id: int, context: ContextTypes.DEFAULT_TYPE):
         log.warning("Referrerga xabar yuborilmadi: %s", e)
 
 
+async def missing_channels(bot, user_id: int) -> list:
+    """Foydalanuvchi obuna bo'lmagan kanallar nomlari ro'yxatini qaytaradi."""
+    missing = []
+    for title, chat, _link in REQUIRED_CHANNELS:
+        ok = False
+        try:
+            member = await bot.get_chat_member(chat_id=chat, user_id=user_id)
+            ok = member.status in ("member", "administrator", "creator") or (
+                member.status == "restricted" and getattr(member, "is_member", False)
+            )
+        except Exception as e:
+            log.warning("Obuna tekshiruvi xatosi (%s): %s", chat, e)
+        if not ok:
+            missing.append(title)
+    return missing
+
+
 # =========================================================
 # START / OBUNA
 # =========================================================
@@ -564,7 +591,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         contest_text()
         + "\n\n🔐 <b>Ovoz berishdan oldin:</b>\n"
-        "1️⃣ Telegram kanalga obuna bo‘ling\n"
+        f"1️⃣ {len(REQUIRED_CHANNELS)} ta Telegram kanalga obuna bo‘ling\n"
         "2️⃣ Instagram sahifamizga obuna bo‘ling\n\n"
         "So‘ng «Obunalarni tekshirish» tugmasini bosing.",
         reply_markup=requirements_keyboard(),
@@ -578,14 +605,8 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     save_user(query.from_user)
 
-    telegram_ok = False
-    try:
-        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-        telegram_ok = member.status in ("member", "administrator", "creator") or (
-            member.status == "restricted" and getattr(member, "is_member", False)
-        )
-    except Exception as e:
-        log.warning("Telegram obuna tekshiruvi xatosi: %s", e)
+    missing = await missing_channels(context.bot, user_id)
+    telegram_ok = not missing
 
     execute(
         "UPDATE users SET subscribed = ?, instagram_verified = 1 WHERE user_id = ?",
@@ -594,10 +615,12 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
     commit()
 
     if not telegram_ok:
+        names = "\n".join(f"• {esc(n)}" for n in missing)
         await edit(
             query,
-            "❌ <b>Telegram kanal obunasi tasdiqlanmadi.</b>\n\n"
-            "Kanalga obuna bo‘ling va qayta tekshiring.",
+            "❌ <b>Quyidagi kanallarga obuna bo‘lmagansiz:</b>\n\n"
+            f"{names}\n\n"
+            "Obuna bo‘ling va qayta tekshiring.",
             requirements_keyboard(),
         )
         return
@@ -614,14 +637,19 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # OVOZ BERISH
 # =========================================================
 
-async def _guard(query) -> bool:
+async def _guard(query, context) -> bool:
     if not contest_active():
         await edit(query, "⛔ <b>Konkurs yakunlangan.</b>")
         return False
-    if not user_has_requirements(query.from_user.id):
+
+    if not user_has_requirements(query.from_user.id) or await missing_channels(
+        context.bot, query.from_user.id
+    ):
+        execute("UPDATE users SET subscribed = 0 WHERE user_id = ?", (query.from_user.id,))
+        commit()
         await edit(
             query,
-            "❌ Avval majburiy obuna shartlarini bajaring.",
+            "❌ Avval barcha majburiy kanallarga obuna bo‘ling.",
             requirements_keyboard(),
         )
         return False
@@ -632,7 +660,7 @@ async def show_candidates(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if not await _guard(query):
+    if not await _guard(query, context):
         return
 
     row = get_user(query.from_user.id)
@@ -661,7 +689,7 @@ async def vote_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if not await _guard(query):
+    if not await _guard(query, context):
         return
 
     try:
@@ -684,7 +712,7 @@ async def vote_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if not await _guard(query):
+    if not await _guard(query, context):
         return
 
     user_id = query.from_user.id
@@ -1174,7 +1202,7 @@ async def newround_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Siz admin emassiz.")
         return
     try:
-        execute("UPDATE users SET main_vote_used = 0, subscribed = 0")
+        execute("UPDATE users SET main_vote_used = 0")
         commit()
         n = fetchone("SELECT COUNT(*) AS n FROM users WHERE main_vote_used = 0")["n"]
         await update.message.reply_text(f"✅ {n} ta foydalanuvchiga yangi ovoz berildi.")
