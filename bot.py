@@ -36,6 +36,7 @@ CHANNEL_LINK = "https://t.me/imperiya_edu"
 INSTAGRAM_LINK = "https://www.instagram.com/imperiya_edu/"
 INSTAGRAM_LINK = "https://www.instagram.com/komfort.mebellari?cplk=MXYxczJxc3RibTdjNw=="
 INSTAGRAM_LINK = "https://www.instagram.com/komfort.mebellari?obrf=MXYxczJxc3RibTdjNw=="
+CHANNEL_USERNAME = "@qogay_online_rasmiy"
 CHANNEL_LINK = "https://t.me/qogay_online_rasmiy"
 
 ADMIN_ID = 7050215692
