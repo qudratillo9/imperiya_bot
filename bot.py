@@ -1174,7 +1174,7 @@ async def newround_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Siz admin emassiz.")
         return
     try:
-        execute("UPDATE users SET main_vote_used = 0")
+        execute("UPDATE users SET main_vote_used = 0, subscribed = 0")
         commit()
         n = fetchone("SELECT COUNT(*) AS n FROM users WHERE main_vote_used = 0")["n"]
         await update.message.reply_text(f"✅ {n} ta foydalanuvchiga yangi ovoz berildi.")
