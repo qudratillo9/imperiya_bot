@@ -105,7 +105,7 @@ PRIZES = [
 
 CANDIDATES = [
     "3-Maktab",
-    "12-Maktab",
+    "12-Maktab (BMSM)",
     "15-Maktab",
     "16-Maktab",
     "17-Maktab",
@@ -686,7 +686,7 @@ async def show_candidates(update: Update, context: ContextTypes.DEFAULT_TYPE):
         query,
         "🗳 <b>OVOZ BERISH</b>\n\n"
         f"🎟 Sizda <b>{left}</b> ta ovoz bor.\n"
-        "Kimga ovoz bermoqchisiz? Xodimni tanlang 👇",
+        "Qaysi maktabga ovoz bermoqchisiz? Maktabni tanlang👇",
         candidate_keyboard(),
     )
 
