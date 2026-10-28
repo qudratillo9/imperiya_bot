@@ -1099,7 +1099,7 @@ async def extend_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-def main():(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     set_setting("contest_start", datetime.now().isoformat())
@@ -1107,6 +1107,7 @@ def main():(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔄 Konkurs hozirdan qayta boshlandi ({contest_days()} kun).\n"
         f"⏱ Tugash: {contest_end().strftime('%d.%m.%Y %H:%M')}"
     )
+    
 async def resetvotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Hammasini noldan boshlash: ovozlar, referrallar, bonuslar o'chadi."""
     if not is_admin(update.effective_user.id):
@@ -1140,9 +1141,6 @@ async def newround_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ {n} ta foydalanuvchiga yangi ovoz berildi.")
     except Exception as e:
         await update.message.reply_text(f"❌ Xato: {e}")
-    execute("UPDATE users SET main_vote_used = 0")
-    commit()
-    await update.message.reply_text("✅ Hammaga yangi 1 ta asosiy ovoz berildi. Eski ovozlar saqlandi.")
 
 async def timeleft_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⏳ Konkursning qolgan vaqti: {time_left_text()}")
