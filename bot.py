@@ -451,7 +451,7 @@ def candidate_keyboard():
     rows = []
     for i in range(0, len(CANDIDATES), 2):
         rows.append([
-            InlineKeyboardButton(f"👤 {CANDIDATES[j]}", callback_data=f"vote_{j}")
+            InlineKeyboardButton(f"🏫 {CANDIDATES[j]}", callback_data=f"vote_{j}")
             for j in range(i, min(i + 2, len(CANDIDATES)))
         ])
     rows.append([InlineKeyboardButton("⬅️ Orqaga", callback_data="back_main")])
