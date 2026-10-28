@@ -83,13 +83,15 @@ if not BOT_TOKEN:
 # Bot HAR BIR kanalda ADMIN bo'lishi shart, aks holda obuna tekshirilmaydi.
 # Yopiq kanal bo'lsa, username o'rniga raqamli ID yozing: -1001234567890
 REQUIRED_CHANNELS = [
-    ("Kanal 1", "@qogay_online_rasmiy", "https://t.me/qogay_online_rasmiy"),
-    ("Kanal 2", "@imperiya_edu", "hhttps://t.me/imperiya_edu"),
+    ("Qog‘ay Online", "@qogay_online_rasmiy", "https://t.me/qogay_online_rasmiy"),
+    ("Imperiya", "@imperiya_edu", "https://t.me/imperiya_edu"),
 ]
-INSTAGRAM_LINK = "https://www.instagram.com/komfort.mebellari?obrf=MXYxczJxc3RibTdjNw=="
-INSTAGRAM_LINK = "https://www.instagram.com/komfort.mebellari?obrf=MXYxczJxc3RibTdjNw=="
 
-
+# Instagram sahifalar (bot buni tekshira olmaydi, faqat havola sifatida ko'rsatadi)
+INSTAGRAM_PAGES = [
+    ("Imperiya", "https://www.instagram.com/imperiya_edu/"),
+    ("Komfort Mebellari", "https://www.instagram.com/komfort.mebellari/"),
+]
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7050215692"))
 DEFAULT_CONTEST_DAYS = int(os.getenv("CONTEST_DAYS", "7"))
@@ -426,7 +428,10 @@ def requirements_keyboard():
             [InlineKeyboardButton(f"📢 {title} — obuna bo‘lish", url=link)]
             for title, _chat, link in REQUIRED_CHANNELS
         ],
-        [InlineKeyboardButton("📸 Instagram sahifaga obuna bo‘lish", url=INSTAGRAM_LINK)],
+        *[
+            [InlineKeyboardButton(f"📸 {title} — Instagram", url=link)]
+            for title, link in INSTAGRAM_PAGES
+        ],
         [InlineKeyboardButton("✅ Obunalarni tekshirish", callback_data="check_subscription")],
     ])
 
@@ -593,7 +598,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         contest_text()
         + "\n\n🔐 <b>Ovoz berishdan oldin:</b>\n"
         f"1️⃣ {len(REQUIRED_CHANNELS)} ta Telegram kanalga obuna bo‘ling\n"
-        "2️⃣ Instagram sahifamizga obuna bo‘ling\n\n"
+        f"2️⃣ {len(INSTAGRAM_PAGES)} ta Instagram sahifaga obuna bo‘ling\n\n"
         "So‘ng «Obunalarni tekshirish» tugmasini bosing.",
         reply_markup=requirements_keyboard(),
         parse_mode=ParseMode.HTML,
