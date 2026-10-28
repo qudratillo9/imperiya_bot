@@ -1094,7 +1094,7 @@ async def extend_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def main():(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     set_setting("contest_start", datetime.now().isoformat())
@@ -1102,7 +1102,36 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔄 Konkurs hozirdan qayta boshlandi ({contest_days()} kun).\n"
         f"⏱ Tugash: {contest_end().strftime('%d.%m.%Y %H:%M')}"
     )
+async def resetvotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Hammasini noldan boshlash: ovozlar, referrallar, bonuslar o'chadi."""
+    if not is_admin(update.effective_user.id):
+        return
 
+    if not context.args or context.args[0] != "tasdiq":
+        await update.message.reply_text(
+            "⚠️ Bu BARCHA ovozlar va referrallarni o‘chiradi.\n"
+            "Tasdiqlash uchun: /resetvotes tasdiq"
+        )
+        return
+
+    execute("DELETE FROM votes")
+    execute("DELETE FROM referral_done")
+    execute(
+        "UPDATE users SET main_vote_used = 0, bonus_votes = 0, "
+        "bonus_granted = 0, referral_count = 0, points = 0"
+    )
+    commit()
+    await update.message.reply_text("✅ Hammasi nolga tushirildi. Har kimda yana 1 ta ovoz bor.")
+
+
+async def newround_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Eski ovozlar reytingda qoladi, lekin hammaga yangi 1 ta asosiy ovoz beriladi."""
+    if not is_admin(update.effective_user.id):
+        return
+
+    execute("UPDATE users SET main_vote_used = 0")
+    commit()
+    await update.message.reply_text("✅ Hammaga yangi 1 ta asosiy ovoz berildi. Eski ovozlar saqlandi.")
 
 async def timeleft_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⏳ Konkursning qolgan vaqti: {time_left_text()}")
@@ -1175,6 +1204,8 @@ def main():
         ("restorevotes", restorevotes_command),
         ("extend", extend_command),
         ("restart", restart_command),
+        ("resetvotes", resetvotes_command),
+        ("newround", newround_command),
         ("cancel", cancel_broadcast),
     ]:
         app.add_handler(CommandHandler(name, handler))
