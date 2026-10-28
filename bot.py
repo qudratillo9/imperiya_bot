@@ -87,7 +87,7 @@ REQUIRED_CHANNELS = [
     ("Kanal 2", "@imperiya_edu", "hhttps://t.me/imperiya_edu"),
 ]
 INSTAGRAM_LINK = "https://www.instagram.com/komfort.mebellari?obrf=MXYxczJxc3RibTdjNw=="
-INSTAGRAM_LINK = "INSTAGRAM_LINK = "https://www.instagram.com/komfort.mebellari?obrf=MXYxczJxc3RibTdjNw=="
+INSTAGRAM_LINK = "https://www.instagram.com/komfort.mebellari?obrf=MXYxczJxc3RibTdjNw=="
 
 
 
