@@ -107,7 +107,12 @@ def execute(sql, params=()):
     """PostgreSQL va SQLite uchun bitta execute helper."""
     if DB_KIND == "postgres":
         sql = sql.replace("?", "%s")
-    cursor.execute(sql, params)
+    try:
+        cursor.execute(sql, params)
+    except Exception:
+        if DB_KIND == "postgres":
+            db.rollback()
+        raise
     return cursor
 
 
@@ -1125,10 +1130,16 @@ async def resetvotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def newround_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Eski ovozlar reytingda qoladi, lekin hammaga yangi 1 ta asosiy ovoz beriladi."""
     if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Siz admin emassiz.")
         return
-
+    try:
+        execute("UPDATE users SET main_vote_used = 0")
+        commit()
+        n = fetchone("SELECT COUNT(*) AS n FROM users WHERE main_vote_used = 0")["n"]
+        await update.message.reply_text(f"✅ {n} ta foydalanuvchiga yangi ovoz berildi.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Xato: {e}")
     execute("UPDATE users SET main_vote_used = 0")
     commit()
     await update.message.reply_text("✅ Hammaga yangi 1 ta asosiy ovoz berildi. Eski ovozlar saqlandi.")
@@ -1150,7 +1161,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     log.error("BOT ERROR: %r", context.error)
-
+    if DB_KIND == "postgres":
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 async def post_init(application: Application):
     await application.bot.set_my_commands([
