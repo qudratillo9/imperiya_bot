@@ -1,5 +1,5 @@
 """
-IMPERIYA — "Imperiyaning eng sodiq xodimi" konkurs boti
+IMPERIYA — "Maktablararo ko'nkurs" konkurs boti
 
 Render uchun:
 - BOT_TOKEN environment variable
