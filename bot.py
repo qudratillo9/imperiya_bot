@@ -1,25 +1,20 @@
 """
-IMPERIYA — "Maktablararo ko'nkurs" konkurs boti
-
-Render uchun:
-- BOT_TOKEN environment variable
-- DATABASE_URL environment variable (Render PostgreSQL Internal Database URL)
-- ixtiyoriy: ADMIN_ID, CONTEST_DAYS
+IMPERIYA — "Imperiyaning eng sodiq maktabi" konkurs boti
+Render uchun:- BOT_TOKEN environment variable- DATABASE_URL environment variable (Render PostgreSQL Internal Database URL)- ixtiyoriy: ADMIN_ID, CONTEST_DAYS
 """
-
 import asyncio
+import csv
+import io
 import html
 import logging
 import os
 import sqlite3
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
 import psycopg2
 from psycopg2.extras import RealDictCursor
-
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -30,56 +25,40 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-
-
 # =========================================================
 # LOGGING
 # =========================================================
-
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
     level=logging.INFO,
 )
 log = logging.getLogger("imperiya-bot")
-
-
 # =========================================================
 # RENDER PORT HEALTH SERVER (eng birinchi ishga tushadi)
 # =========================================================
-
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
         self.wfile.write(b"IMPERIYA BOT OK")
-
     def do_HEAD(self):
         self.send_response(200)
         self.end_headers()
-
     def log_message(self, format, *args):
         return
-
-
 def start_health_server():
     port = int(os.getenv("PORT", "10000"))
     server = ThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
     log.info("Health server portda ishga tushdi: %s", port)
     server.serve_forever()
-
-
 threading.Thread(target=start_health_server, daemon=True).start()
-
-
 # =========================================================
 # SOZLAMALAR
 # =========================================================
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable topilmadi.")
-
 # Majburiy kanallar: (tugmadagi nom, kanal username yoki ID, havola)
 # Bot HAR BIR kanalda ADMIN bo'lishi shart, aks holda obuna tekshirilmaydi.
 # Yopiq kanal bo'lsa, username o'rniga raqamli ID yozing: -1001234567890
@@ -87,24 +66,20 @@ REQUIRED_CHANNELS = [
     ("Qog‘ay Online", "@qogay_online_rasmiy", "https://t.me/qogay_online_rasmiy"),
     ("Imperiya", "@imperiya_edu", "https://t.me/imperiya_edu"),
 ]
-
 # Instagram sahifalar (bot buni tekshira olmaydi, faqat havola sifatida ko'rsatadi)
 INSTAGRAM_PAGES = [
     ("Imperiya", "https://www.instagram.com/imperiya_edu/"),
     ("Komfort Mebellari", "https://www.instagram.com/komfort.mebellari/"),
 ]
-
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7050215692"))
 DEFAULT_CONTEST_DAYS = int(os.getenv("CONTEST_DAYS", "7"))
 REFERRALS_PER_BONUS = 5
 IG_MIN_SECONDS = 8  # Instagram bosqichida tugma ishlashi uchun minimal kutish
-
 PRIZES = [
-    ("🥇", "1-o‘rin", "Kondisioner"),
-    ("🥈", "2-o‘rin", "Televizor"),
-    ("🥉", "3-o‘rin", "Kuller"),
+    (" ", "1-o‘rin", "Kondisioner"),
+    (" ", "2-o‘rin", "Televizor"),
+    (" ", "3-o‘rin", "Kuller"),
 ]
-
 CANDIDATES = [
     "3-Maktab",
     "12-Maktab",
@@ -127,14 +102,10 @@ CANDIDATES = [
     "41-Maktab",
     "44-Maktab",
 ]
-
-
 # =========================================================
 # DATABASE
 # =========================================================
-
 DATABASE_URL = os.getenv("DATABASE_URL")
-
 if not DATABASE_URL:
     # Local kompyuterda test qilish uchun SQLite fallback.
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -149,10 +120,7 @@ else:
     db.autocommit = True
     cursor = db.cursor(cursor_factory=RealDictCursor)
     DB_KIND = "postgres"
-
 log.info("Database: %s", DB_KIND)
-
-
 def execute(sql, params=()):
     """PostgreSQL va SQLite uchun bitta execute helper."""
     if DB_KIND == "postgres":
@@ -166,23 +134,15 @@ def execute(sql, params=()):
             pass
         raise
     return cursor
-
-
 def fetchone(sql, params=()):
     return execute(sql, params).fetchone()
-
-
 def fetchall(sql, params=()):
     return execute(sql, params).fetchall()
-
-
 def commit():
     try:
         db.commit()
     except Exception as e:
         log.warning("commit xatosi: %s", e)
-
-
 def init_database():
     if DB_KIND == "postgres":
         statements = [
@@ -228,9 +188,9 @@ def init_database():
                 log_id BIGSERIAL PRIMARY KEY,
                 candidate TEXT NOT NULL,
                 amount INTEGER NOT NULL,
+            )
                 reason TEXT,
                 created_at TEXT
-            )
             """,
         ]
         for stmt in statements:
@@ -288,20 +248,13 @@ def init_database():
                 (REFERRALS_PER_BONUS,),
             )
     commit()
-
-
 init_database()
-
-
 # =========================================================
 # KONKURS VAQTI
 # =========================================================
-
 def get_setting(key: str, default=None):
     row = fetchone("SELECT value FROM settings WHERE key = ?", (key,))
     return row["value"] if row else default
-
-
 def set_setting(key: str, value: str):
     execute(
         """
@@ -311,8 +264,6 @@ def set_setting(key: str, value: str):
         (key, value),
     )
     commit()
-
-
 def contest_start() -> datetime:
     value = get_setting("contest_start")
     if value:
@@ -320,24 +271,30 @@ def contest_start() -> datetime:
     now = datetime.now()
     set_setting("contest_start", now.isoformat())
     return now
-
-
 def contest_days() -> int:
     return int(get_setting("contest_days", DEFAULT_CONTEST_DAYS))
-
-
-def extra_hours() -> int:
-    return int(get_setting("contest_extra_hours", 0))
-
-
+# O'zbekiston vaqti (UTC+5). Render serveri UTC da ishlaydi, shuning uchun
+# ko'rsatiladigan va kiritiladigan soatlar shu zonaga o'giriladi.
+LOCAL_TZ = timezone(timedelta(hours=int(os.getenv("TZ_OFFSET_HOURS", "5"))))
+def to_local(dt: datetime) -> datetime:
+    """Server (naive) vaqtini mahalliy vaqtga o'giradi."""
+    return dt.astimezone(LOCAL_TZ).replace(tzinfo=None)
+def from_local(dt: datetime) -> datetime:
+    """Mahalliy (naive) vaqtni server (naive) vaqtiga o'giradi."""
+    return dt.replace(tzinfo=LOCAL_TZ).astimezone().replace(tzinfo=None)
+def fmt_dt(dt: datetime, pattern: str = "%d.%m.%Y %H:%M") -> str:
+    return to_local(dt).strftime(pattern)
+def now_local() -> datetime:
+    return to_local(datetime.now())
+def extra_minutes() -> int:
+    value = get_setting("contest_extra_minutes")
+    if value is not None:
+        return int(value)
+    return int(get_setting("contest_extra_hours", 0)) * 60
 def contest_end() -> datetime:
-    return contest_start() + timedelta(days=contest_days(), hours=extra_hours())
-
-
+    return contest_start() + timedelta(days=contest_days(), minutes=extra_minutes())
 def contest_active() -> bool:
     return datetime.now() < contest_end()
-
-
 def time_left_text() -> str:
     left = contest_end() - datetime.now()
     if left.total_seconds() <= 0:
@@ -346,23 +303,14 @@ def time_left_text() -> str:
     hours, rem = divmod(left.seconds, 3600)
     minutes = rem // 60
     return f"{days} kun {hours} soat {minutes} daqiqa"
-
-
 contest_start()
-
-
 # =========================================================
 # YORDAMCHI
 # =========================================================
-
 def esc(text) -> str:
     return html.escape(str(text or ""))
-
-
 def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_ID
-
-
 def save_user(user):
     execute(
         """
@@ -375,58 +323,45 @@ def save_user(user):
         (user.id, user.first_name or "", user.username or "", datetime.now().isoformat()),
     )
     commit()
-
-
 def get_user(user_id: int):
     return fetchone("SELECT * FROM users WHERE user_id = ?", (user_id,))
-
-
 def user_has_requirements(user_id: int) -> bool:
     row = get_user(user_id)
     return bool(row and row["subscribed"] == 1 and row["instagram_verified"] == 1)
-
-
 def vote_counts() -> list:
     counts = {c: 0 for c in CANDIDATES}
     for r in fetchall("SELECT candidate, COUNT(*) AS n FROM votes GROUP BY candidate"):
         if r["candidate"] in counts:
             counts[r["candidate"]] = int(r["n"])
     return sorted(counts.items(), key=lambda x: (-x[1], x[0]))
-
-
 def progress_bar(value: int, total: int, length: int = 10) -> str:
     if total <= 0:
         return "░" * length
     filled = round(value / total * length)
     filled = max(0, min(length, filled))
     return "█" * filled + "░" * (length - filled)
-
-
 def prizes_text() -> str:
     return "\n".join(f"{icon} <b>{place}:</b> {prize}" for icon, place, prize in PRIZES)
-
-
 def contest_text() -> str:
     return (
-        "🏆 <b>IMPERIYANING ENG SODIQ XODIMI</b>\n"
+        " <b>IMPERIYANING ENG SODIQ MAKTABI</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "🎁 <b>SOVG‘ALAR</b>\n"
+        "
+ <b>SOVG‘ALAR</b>\n"
         f"{prizes_text()}\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        f"➕ Har {REFERRALS_PER_BONUS} ta haqiqiy referral = 1 ta bonus ovoz\n"
-        f"⏳ Qolgan vaqt: <b>{time_left_text()}</b>\n\n"
-        "⚠️ Soxta akkauntlar, nakrutka va sun’iy ovozlar hisobga olinmaydi. "
+        f" Har {REFERRALS_PER_BONUS} ta haqiqiy referral = 1 ta bonus ovoz\n"
+        f" Qolgan vaqt: <b>{time_left_text()}</b>\n\n"
+        "
+ Soxta akkauntlar, nakrutka va sun’iy ovozlar hisobga olinmaydi. "
         "Qoidabuzarlik aniqlansa, ishtirokchi chetlashtiriladi."
     )
-
-
-def leaderboard_text(title: str = "📈 REYTING") -> str:
+def leaderboard_text(title: str = " REYTING") -> str:
     counts = vote_counts()
     total = sum(n for _, n in counts)
     top = counts[0][1] if counts else 0
-    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-
-    lines = [f"<b>{title}</b>", f"🗳 Jami ovozlar: <b>{total}</b>", ""]
+    medals = [" ", " ", " ", " ", " "]
+    lines = [f"<b>{title}</b>", f" Jami ovozlar: <b>{total}</b>", ""]
     for i, (name, n) in enumerate(counts):
         icon = medals[i] if i < len(medals) else f"{i + 1}."
         percent = (n / total * 100) if total else 0
@@ -434,82 +369,67 @@ def leaderboard_text(title: str = "📈 REYTING") -> str:
         lines.append(f"<code>{progress_bar(n, top)}</code> {n} ta • {percent:.0f}%")
         lines.append("")
     return "\n".join(lines)
-
-
 def votes_available(row) -> int:
     return (0 if row["main_vote_used"] else 1) + row["bonus_votes"]
-
-
 # =========================================================
 # KLAVIATURALAR
 # =========================================================
-
 def requirements_keyboard():
     return InlineKeyboardMarkup([
         *[
-            [InlineKeyboardButton(f"📢 {title} — obuna bo‘lish", url=link)]
+            [InlineKeyboardButton(f" {title} — obuna bo‘lish", url=link)]
             for title, _chat, link in REQUIRED_CHANNELS
         ],
-        [InlineKeyboardButton("✅ Obunalarni tekshirish", callback_data="check_subscription")],
+        [InlineKeyboardButton(" Obunalarni tekshirish", callback_data="check_subscription")],
     ])
-
-
 def instagram_step_view(step: int):
     """Instagram bosqichi matni va tugmalari."""
     title, link = INSTAGRAM_PAGES[step]
     text = (
-        f"📸 <b>INSTAGRAM — {step + 1}/{len(INSTAGRAM_PAGES)}-bosqich</b>\n\n"
-        f"1️⃣ Pastdagi tugma orqali <b>{esc(title)}</b> sahifasiga o‘ting\n"
-        "2️⃣ Sahifaga obuna bo‘ling\n"
-        "3️⃣ Shu yerga qaytib, «Obuna bo‘ldim» tugmasini bosing"
+        f" <b>INSTAGRAM — {step + 1}/{len(INSTAGRAM_PAGES)}-bosqich</b>\n\n"
+        f" Pastdagi tugma orqali <b>{esc(title)}</b> sahifasiga o‘ting\n"
+        "
+ Sahifaga obuna bo‘ling\n"
+        "
+ Shu yerga qaytib, «Obuna bo‘ldim» tugmasini bosing"
     )
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"📸 {title} sahifasiga o‘tish", url=link)],
-        [InlineKeyboardButton("✅ Obuna bo‘ldim", callback_data=f"ig_done_{step}")],
+        [InlineKeyboardButton(f" {title} sahifasiga o‘tish", url=link)],
+        [InlineKeyboardButton(" Obuna bo‘ldim", callback_data=f"ig_done_{step}")],
     ])
     return text, keyboard
-
-
 def main_menu_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🗳 Ovoz berish", callback_data="show_candidates")],
-        [InlineKeyboardButton("📈 Reyting", callback_data="leaderboard")],
+        [InlineKeyboardButton(" Ovoz berish", callback_data="show_candidates")],
+        [InlineKeyboardButton(" Reyting", callback_data="leaderboard")],
         [
-            InlineKeyboardButton("🔗 Referral", callback_data="my_referral"),
-            InlineKeyboardButton("📊 Statistikam", callback_data="my_stats"),
+            InlineKeyboardButton(" Referral", callback_data="my_referral"),
+            InlineKeyboardButton(" Statistikam", callback_data="my_stats"),
         ],
     ])
-
-
 def candidate_keyboard():
     rows = []
     for i in range(0, len(CANDIDATES), 2):
         rows.append([
-            InlineKeyboardButton(f"👤 {CANDIDATES[j]}", callback_data=f"vote_{j}")
+            InlineKeyboardButton(f" {CANDIDATES[j]}", callback_data=f"vote_{j}")
             for j in range(i, min(i + 2, len(CANDIDATES)))
         ])
-    rows.append([InlineKeyboardButton("⬅️ Orqaga", callback_data="back_main")])
+    rows.append([InlineKeyboardButton(" Orqaga", callback_data="back_main")])
     return InlineKeyboardMarkup(rows)
-
-
 def confirm_keyboard(index: int):
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"confirm_{index}"),
-        InlineKeyboardButton("↩️ Boshqasini tanlash", callback_data="show_candidates"),
+        InlineKeyboardButton(" Tasdiqlash", callback_data=f"confirm_{index}"),
+        InlineKeyboardButton(" Boshqasini tanlash", callback_data="show_candidates"),
     ]])
-
-
 def admin_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Umumiy statistika", callback_data="admin_stats")],
-        [InlineKeyboardButton("🏆 Natijalar", callback_data="admin_results")],
-        [InlineKeyboardButton("👥 Ovoz berganlar", callback_data="admin_voters")],
-        [InlineKeyboardButton("🎁 Referral statistikasi", callback_data="admin_referrals")],
-        [InlineKeyboardButton("📢 Barchaga xabar yuborish", callback_data="admin_broadcast")],
-        [InlineKeyboardButton("🔄 Yangilash", callback_data="admin_panel")],
+        [InlineKeyboardButton(" Umumiy statistika", callback_data="admin_stats")],
+        [InlineKeyboardButton(" Natijalar", callback_data="admin_results")],
+        [InlineKeyboardButton(" Ovoz berganlar", callback_data="admin_voters")],
+        [InlineKeyboardButton(" Referral statistikasi", callback_data="admin_referrals")],
+        [InlineKeyboardButton(" Barchaga xabar yuborish", callback_data="admin_broadcast")],
+        [InlineKeyboardButton(" Yangilash", callback_data="admin_panel")],
     ])
-
-
 async def edit(query, text: str, keyboard=None):
     try:
         await query.edit_message_text(
@@ -521,17 +441,13 @@ async def edit(query, text: str, keyboard=None):
     except Exception as e:
         if "not modified" not in str(e).lower():
             log.warning("edit xatosi: %s", e)
-
-
 # =========================================================
 # REFERRAL
 # =========================================================
-
 async def process_referral(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     row = get_user(user_id)
     if not row:
         return
-
     referrer_id = row["referrer_id"]
     if not referrer_id or referrer_id == user_id:
         return
@@ -541,7 +457,6 @@ async def process_referral(user_id: int, context: ContextTypes.DEFAULT_TYPE):
         return
     if not get_user(referrer_id):
         return
-
     execute(
         "INSERT INTO referral_done (user_id, created_at) VALUES (?, ?)",
         (user_id, datetime.now().isoformat()),
@@ -551,7 +466,6 @@ async def process_referral(user_id: int, context: ContextTypes.DEFAULT_TYPE):
         "WHERE user_id = ?",
         (referrer_id,),
     )
-
     ref = get_user(referrer_id)
     should_have = ref["points"] // REFERRALS_PER_BONUS
     new_bonus = should_have - ref["bonus_granted"]
@@ -561,20 +475,18 @@ async def process_referral(user_id: int, context: ContextTypes.DEFAULT_TYPE):
             (new_bonus, should_have, referrer_id),
         )
     commit()
-
     try:
         text = (
-            "🎉 <b>Yangi referral!</b>\n"
+            " <b>Yangi referral!</b>\n"
             f"Sizning havolangiz orqali <b>{esc(row['first_name'])}</b> qo‘shildi.\n"
-            f"👥 Jami referral: <b>{ref['referral_count']}</b>"
+            f"
+ Jami referral: <b>{ref['referral_count']}</b>"
         )
         if new_bonus > 0:
-            text += f"\n🎁 Sizga <b>{new_bonus}</b> ta bonus ovoz berildi!"
+            text += f"\n Sizga <b>{new_bonus}</b> ta bonus ovoz berildi!"
         await context.bot.send_message(referrer_id, text, parse_mode=ParseMode.HTML)
     except Exception as e:
         log.warning("Referrerga xabar yuborilmadi: %s", e)
-
-
 async def missing_channels(bot, user_id: int) -> list:
     """Foydalanuvchi obuna bo'lmagan kanallar nomlari ro'yxatini qaytaradi."""
     missing = []
@@ -590,16 +502,12 @@ async def missing_channels(bot, user_id: int) -> list:
         if not ok:
             missing.append(title)
     return missing
-
-
 # =========================================================
 # START / OBUNA
 # =========================================================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     save_user(user)
-
     if context.args:
         try:
             referrer_id = int(context.args[0])
@@ -612,92 +520,80 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 commit()
         except (ValueError, TypeError):
             pass
-
     if not contest_active():
         await update.message.reply_text(
-            "⛔ <b>Konkurs yakunlangan.</b>\n\n"
-            f"Tugagan vaqt: {contest_end().strftime('%d.%m.%Y %H:%M')}",
+            " <b>Konkurs yakunlangan.</b>\n\n"
+            f"Tugagan vaqt: {fmt_dt(contest_end())}",
             parse_mode=ParseMode.HTML,
         )
         return
-
     if user_has_requirements(user.id):
         await process_referral(user.id, context)
         await update.message.reply_text(
             contest_text(), reply_markup=main_menu_keyboard(), parse_mode=ParseMode.HTML
         )
         return
-
     row = get_user(user.id)
     if row["subscribed"] == 1 and row["instagram_verified"] != 1:
         text, keyboard = instagram_step_view(0)
         context.user_data["ig_shown"] = time.time()
         await update.message.reply_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
         return
-
     await update.message.reply_text(
         contest_text()
-        + "\n\n🔐 <b>Ovoz berishdan oldin 2 bosqich:</b>\n"
-        f"1️⃣ {len(REQUIRED_CHANNELS)} ta Telegram kanalga obuna bo‘ling\n"
-        f"2️⃣ {len(INSTAGRAM_PAGES)} ta Instagram sahifaga obuna bo‘ling\n\n"
+        + "\n\n <b>Ovoz berishdan oldin 2 bosqich:</b>\n"
+        f" {len(REQUIRED_CHANNELS)} ta Telegram kanalga obuna bo‘ling\n"
+        f" {len(INSTAGRAM_PAGES)} ta Instagram sahifaga obuna bo‘ling\n\n"
         "Avval Telegram kanallarga obuna bo‘lib, «Obunalarni tekshirish» tugmasini bosing.",
         reply_markup=requirements_keyboard(),
         parse_mode=ParseMode.HTML,
     )
-
-
 async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     await query.answer()
     save_user(query.from_user)
-
     missing = await missing_channels(context.bot, user_id)
     telegram_ok = not missing
-
     execute(
         "UPDATE users SET subscribed = ? WHERE user_id = ?",
         (1 if telegram_ok else 0, user_id),
     )
     commit()
-
     if not telegram_ok:
         names = "\n".join(f"• {esc(n)}" for n in missing)
         await edit(
             query,
-            "❌ <b>Quyidagi kanallarga obuna bo‘lmagansiz:</b>\n\n"
+            "
+ <b>Quyidagi kanallarga obuna bo‘lmagansiz:</b>\n\n"
             f"{names}\n\n"
             "Obuna bo‘ling va qayta tekshiring.",
             requirements_keyboard(),
         )
         return
-
     row = get_user(user_id)
     if row["instagram_verified"] != 1:
         text, keyboard = instagram_step_view(0)
         context.user_data["ig_shown"] = time.time()
-        await edit(query, "✅ <b>Telegram obunasi tasdiqlandi!</b>\n\n" + text, keyboard)
+        await edit(query, "
         return
-
+ <b>Telegram obunasi tasdiqlandi!</b>\n\n" + text, keyboard)
     await process_referral(user_id, context)
     await edit(
         query,
-        "✅ <b>Shartlar qabul qilindi!</b>\n\nEndi konkursda ishtirok etishingiz mumkin.",
+        "
+ <b>Shartlar qabul qilindi!</b>\n\nEndi konkursda ishtirok etishingiz mumkin.",
         main_menu_keyboard(),
     )
-
-
 async def instagram_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Instagram bosqichlari: har bosqichda 'Obuna bo'ldim' bosiladi."""
     query = update.callback_query
     user_id = query.from_user.id
-
     try:
         step = int(query.data.replace("ig_done_", ""))
     except ValueError:
         await query.answer()
         return
-
     # Telegram obunasi hali ham amalda ekanini tekshiramiz
     missing = await missing_channels(context.bot, user_id)
     if missing:
@@ -706,57 +602,52 @@ async def instagram_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         commit()
         await edit(
             query,
-            "❌ Avval barcha Telegram kanallarga obuna bo‘ling.",
+            "
+ Avval barcha Telegram kanallarga obuna bo‘ling.",
             requirements_keyboard(),
         )
         return
-
     shown = context.user_data.get("ig_shown", 0)
     if time.time() - shown < IG_MIN_SECONDS:
         await query.answer(
-            "⏳ Avval sahifaga o‘tib obuna bo‘ling, so‘ng tugmani bosing.",
+            "
+ Avval sahifaga o‘tib obuna bo‘ling, so‘ng tugmani bosing.",
             show_alert=True,
         )
         return
-
     await query.answer()
-
     if step + 1 < len(INSTAGRAM_PAGES):
         text, keyboard = instagram_step_view(step + 1)
         context.user_data["ig_shown"] = time.time()
-        await edit(query, "✅ <b>Tasdiqlandi!</b>\n\n" + text, keyboard)
+        await edit(query, " <b>Tasdiqlandi!</b>\n\n" + text, keyboard)
         return
-
     execute("UPDATE users SET instagram_verified = 1 WHERE user_id = ?", (user_id,))
     commit()
     await process_referral(user_id, context)
     await edit(
         query,
-        "✅ <b>Shartlar qabul qilindi!</b>\n\nEndi konkursda ishtirok etishingiz mumkin.",
+        "
+ <b>Shartlar qabul qilindi!</b>\n\nEndi konkursda ishtirok etishingiz mumkin.",
         main_menu_keyboard(),
     )
-
-
 # =========================================================
 # OVOZ BERISH
 # =========================================================
-
 async def _guard(query, context) -> bool:
     if not contest_active():
-        await edit(query, "⛔ <b>Konkurs yakunlangan.</b>")
+        await edit(query, " <b>Konkurs yakunlangan.</b>")
         return False
-
     user_id = query.from_user.id
     if await missing_channels(context.bot, user_id):
         execute("UPDATE users SET subscribed = 0 WHERE user_id = ?", (user_id,))
         commit()
         await edit(
             query,
-            "❌ Avval barcha majburiy kanallarga obuna bo‘ling.",
+            "
+ Avval barcha majburiy kanallarga obuna bo‘ling.",
             requirements_keyboard(),
         )
         return False
-
     row = get_user(user_id)
     if row["subscribed"] != 1:
         execute("UPDATE users SET subscribed = 1 WHERE user_id = ?", (user_id,))
@@ -767,79 +658,67 @@ async def _guard(query, context) -> bool:
         await edit(query, text, keyboard)
         return False
     return True
-
-
 async def show_candidates(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     if not await _guard(query, context):
         return
-
     row = get_user(query.from_user.id)
     left = votes_available(row)
-
     if left <= 0 and not is_admin(query.from_user.id):
         await edit(
             query,
-            "ℹ️ <b>Sizning ovozlaringiz tugagan.</b>\n\n"
+            " <b>Sizning ovozlaringiz tugagan.</b>\n\n"
             "Qo‘shimcha ovoz olish uchun do‘stlaringizni taklif qiling: "
             f"har {REFERRALS_PER_BONUS} ta referral = 1 ovoz.",
             main_menu_keyboard(),
         )
         return
-
     await edit(
         query,
-        "🗳 <b>OVOZ BERISH</b>\n\n"
+        "
+ <b>OVOZ BERISH</b>\n\n"
         + (
-            f"🎟 Sizda <b>{left}</b> ta ovoz bor.\n"
+            f"
+ Sizda <b>{left}</b> ta ovoz bor.\n"
             if left > 0
-            else "🧪 <b>Test rejimi:</b> ovozlaringiz tugagan, endi berilgan ovozlar reytingga yozilmaydi.\n"
+            else " <b>Test rejimi:</b> ovozlaringiz tugagan, endi berilgan ovozlar reytingga yozilmaydi.\n"
         )
-        + "Kimga ovoz bermoqchisiz? Xodimni tanlang 👇",
+        + "Qaysi maktabga ovoz bermoqchisiz? Maktabni tanlang ",
         candidate_keyboard(),
     )
-
-
 async def vote_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     if not await _guard(query, context):
         return
-
     try:
         index = int(query.data.replace("vote_", ""))
         candidate = CANDIDATES[index]
     except (ValueError, IndexError):
-        await query.answer("❌ Nomzod topilmadi.", show_alert=True)
+ Maktab topilmadi.", show_alert=True)
+        await query.answer("
         return
-
     await edit(
         query,
-        "🗳 <b>OVOZNI TASDIQLANG</b>\n\n"
-        f"👤 <b>{esc(candidate)}</b>\n\n"
+        "
+ <b>OVOZNI TASDIQLANG</b>\n\n"
+        f" <b>{esc(candidate)}</b>\n\n"
         "Ovoz berilgach, uni qaytarib bo‘lmaydi.",
         confirm_keyboard(index),
     )
-
-
 async def vote_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     if not await _guard(query, context):
         return
-
     user_id = query.from_user.id
     try:
         index = int(query.data.replace("confirm_", ""))
         candidate = CANDIDATES[index]
     except (ValueError, IndexError):
-        await query.answer("❌ Nomzod topilmadi.", show_alert=True)
+        await query.answer(" Maktab topilmadi.", show_alert=True)
         return
-
     # Shartli UPDATE: qayta bosilsa ham bitta ovoz ketadi.
     vote_type = None
     if execute(
@@ -852,108 +731,95 @@ async def vote_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         (user_id,),
     ).rowcount == 1:
         vote_type = "bonus"
-
     if vote_type is None and is_admin(user_id):
         commit()
         await edit(
             query,
-            "✅ <b>OVOZINGIZ QABUL QILINDI!</b>\n"
+            "
+ <b>OVOZINGIZ QABUL QILINDI!</b>\n"
             "━━━━━━━━━━━━━━━━━━\n\n"
-            f"🏫 Xodim: <b>{esc(candidate)}</b>\n"
-            "🎟 Ovoz turi: 🧪 test (hisobga olinmaydi)\n\n"
-            "Rahmat! Ko‘proq ovoz olish uchun do‘stlaringizni taklif qiling 🔗",
+            f"
+ Maktab: <b>{esc(candidate)}</b>\n"
+            " Ovoz turi:  test (hisobga olinmaydi)\n\n"
+            "Rahmat! Ko‘proq ovoz olish uchun do‘stlaringizni taklif qiling ",
             main_menu_keyboard(),
         )
         return
-
     if vote_type is None:
         commit()
-        await query.answer("❌ Sizda ovoz qolmagan.", show_alert=True)
+        await query.answer(" Sizda ovoz qolmagan.", show_alert=True)
         await edit(
             query,
-            "ℹ️ <b>Sizning ovozlaringiz tugagan.</b>",
+            "
+ <b>Sizning ovozlaringiz tugagan.</b>",
             main_menu_keyboard(),
         )
         return
-
     execute(
         "INSERT INTO votes (user_id, candidate, vote_type, created_at) VALUES (?, ?, ?, ?)",
         (user_id, candidate, vote_type, datetime.now().isoformat()),
     )
     commit()
-
     counts = vote_counts()
     rank = next(i for i, (name, _) in enumerate(counts, 1) if name == candidate)
     votes_now = dict(counts)[candidate]
-
     row = get_user(user_id)
     await edit(
         query,
-        "✅ <b>OVOZINGIZ QABUL QILINDI!</b>\n"
+        "
+ <b>OVOZINGIZ QABUL QILINDI!</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        f"👤 Xodim: <b>{esc(candidate)}</b>\n"
-        f"🎟 Ovoz turi: {'asosiy' if vote_type == 'main' else 'bonus'}\n"
-        f"📈 Hozirgi o‘rni: <b>{rank}-o‘rin</b> ({votes_now} ta ovoz)\n\n"
-        f"🎁 Qolgan ovozlaringiz: <b>{votes_available(row)}</b>\n\n"
-        "Rahmat! Ko‘proq ovoz olish uchun do‘stlaringizni taklif qiling 🔗",
+        f" Maktab: <b>{esc(candidate)}</b>\n"
+        f" Ovoz turi: {'asosiy' if vote_type == 'main' else 'bonus'}\n"
+        f" Hozirgi o‘rni: <b>{rank}-o‘rin</b> ({votes_now} ta ovoz)\n\n"
+        f" Qolgan ovozlaringiz: <b>{votes_available(row)}</b>\n\n"
+        "Rahmat! Ko‘proq ovoz olish uchun do‘stlaringizni taklif qiling ",
         main_menu_keyboard(),
     )
-
-
 async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await edit(
         query,
-        leaderboard_text() + f"\n⏳ Qolgan vaqt: <b>{time_left_text()}</b>",
+        leaderboard_text() + f"\n Qolgan vaqt: <b>{time_left_text()}</b>",
         InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Yangilash", callback_data="leaderboard")],
-            [InlineKeyboardButton("⬅️ Orqaga", callback_data="back_main")],
         ]),
+            [InlineKeyboardButton(" Yangilash", callback_data="leaderboard")],
+            [InlineKeyboardButton(" Orqaga", callback_data="back_main")],
     )
-
-
 # =========================================================
 # REFERRAL / STATISTIKA
 # =========================================================
-
 async def _referral_text(context, user_id: int) -> str:
     me = await context.bot.get_me()
     link = f"https://t.me/{me.username}?start={user_id}"
     row = get_user(user_id)
     until_next = REFERRALS_PER_BONUS - (row["points"] % REFERRALS_PER_BONUS)
     return (
-        "🔗 <b>SIZNING REFERRAL HAVOLANGIZ</b>\n\n"
+        "
+ <b>SIZNING REFERRAL HAVOLANGIZ</b>\n\n"
         f"<code>{link}</code>\n\n"
-        f"👥 Taklif qilganlar: <b>{row['referral_count']}</b> ta\n"
-        f"⭐ Ball: <b>{row['points']}</b>\n"
-        f"🎁 Bonus ovozlar: <b>{row['bonus_votes']}</b> ta\n"
-        f"🎯 Keyingi bonusgacha: <b>{until_next}</b> ta referral\n\n"
+        f" Taklif qilganlar: <b>{row['referral_count']}</b> ta\n"
+        f" Ball: <b>{row['points']}</b>\n"
+        f" Bonus ovozlar: <b>{row['bonus_votes']}</b> ta\n"
+        f" Keyingi bonusgacha: <b>{until_next}</b> ta referral\n\n"
         f"Har {REFERRALS_PER_BONUS} ta haqiqiy referral = 1 ta bonus ovoz."
     )
-
-
 async def my_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await edit(query, await _referral_text(context, query.from_user.id), main_menu_keyboard())
-
-
 async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_user(update.effective_user)
     await update.message.reply_text(
         await _referral_text(context, update.effective_user.id),
         parse_mode=ParseMode.HTML,
     )
-
-
 async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     user_id = query.from_user.id
     row = get_user(user_id)
-
     total_votes = fetchone(
         "SELECT COUNT(*) AS n FROM votes WHERE user_id = ?", (user_id,)
     )["n"]
@@ -961,66 +827,54 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "SELECT candidate FROM votes WHERE user_id = ? ORDER BY vote_id DESC LIMIT 1",
         (user_id,),
     )
-
     await edit(
         query,
-        "📊 <b>SIZNING STATISTIKANGIZ</b>\n\n"
-        f"👤 Ism: {esc(row['first_name'])}\n"
-        f"👥 Referral: {row['referral_count']}\n"
-        f"⭐ Ball: {row['points']}\n"
-        f"🎁 Bonus ovozlar: {row['bonus_votes']}\n"
-        f"🎟 Qolgan ovozlar: {votes_available(row)}\n"
-        f"🗳 Jami bergan ovozlar: {total_votes}\n"
-        f"🏆 Oxirgi ovoz: {esc(last['candidate']) if last else 'Hali ovoz berilmagan'}",
+        " <b>SIZNING STATISTIKANGIZ</b>\n\n"
+        f" Ism: {esc(row['first_name'])}\n"
+        f" Referral: {row['referral_count']}\n"
+        f" Ball: {row['points']}\n"
+        f" Bonus ovozlar: {row['bonus_votes']}\n"
+        f" Qolgan ovozlar: {votes_available(row)}\n"
+        f" Jami bergan ovozlar: {total_votes}\n"
+        f" Oxirgi ovoz: {esc(last['candidate']) if last else 'Hali ovoz berilmagan'}",
         main_menu_keyboard(),
     )
-
-
 async def back_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await edit(query, contest_text(), main_menu_keyboard())
-
-
 # =========================================================
 # ADMIN PANEL
 # =========================================================
-
 async def _admin_only(query) -> bool:
     if not is_admin(query.from_user.id):
-        await query.answer("❌ Ruxsat yo‘q!", show_alert=True)
+        await query.answer(" Ruxsat yo‘q!", show_alert=True)
         return False
     await query.answer()
     return True
-
-
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Sizda admin huquqi mavjud emas.")
+        await update.message.reply_text(" Sizda admin huquqi mavjud emas.")
         return
     await update.message.reply_text(
-        "🔐 <b>IMPERIYA KONKURS — ADMIN PANEL</b>\n\nKerakli bo‘limni tanlang:",
+        "
+ <b>IMPERIYA KONKURS — ADMIN PANEL</b>\n\nKerakli bo‘limni tanlang:",
         reply_markup=admin_keyboard(),
-        parse_mode=ParseMode.HTML,
     )
-
-
+        parse_mode=ParseMode.HTML,
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not await _admin_only(query):
         return
     await edit(
         query,
-        "🔐 <b>IMPERIYA KONKURS — ADMIN PANEL</b>\n\nKerakli bo‘limni tanlang:",
+        " <b>IMPERIYA KONKURS — ADMIN PANEL</b>\n\nKerakli bo‘limni tanlang:",
         admin_keyboard(),
     )
-
-
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not await _admin_only(query):
         return
-
     users = fetchone("SELECT COUNT(*) AS n FROM users")["n"]
     subs = fetchone("SELECT COUNT(*) AS n FROM users WHERE subscribed = 1")["n"]
     insta = fetchone("SELECT COUNT(*) AS n FROM users WHERE instagram_verified = 1")["n"]
@@ -1028,142 +882,121 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     voters = fetchone("SELECT COUNT(DISTINCT user_id) AS n FROM votes")["n"]
     referrals = fetchone("SELECT COALESCE(SUM(referral_count), 0) AS n FROM users")["n"]
     bonus = fetchone("SELECT COALESCE(SUM(bonus_votes), 0) AS n FROM users")["n"]
-
     await edit(
         query,
-        "📊 <b>UMUMIY STATISTIKA</b>\n\n"
-        f"👥 Jami foydalanuvchilar: {users}\n"
-        f"📢 Telegram obunachilari: {subs}\n"
-        f"📸 Instagram tasdiqlari: {insta}\n"
-        f"🗳 Jami ovozlar: {votes}\n"
-        f"👤 Ovoz berganlar: {voters}\n"
-        f"🔗 Jami referral: {referrals}\n"
-        f"🎁 Ishlatilmagan bonus: {bonus}\n\n"
-        f"🟢 Konkurs: <b>{'FAOL' if contest_active() else 'YAKUNLANGAN'}</b>\n"
-        f"📅 Davomiyligi: {contest_days()} kun\n"
-        f"⏱ Tugash: {contest_end().strftime('%d.%m.%Y %H:%M')}\n"
-        f"⏳ Qolgan: {time_left_text()}",
+        "
+ <b>UMUMIY STATISTIKA</b>\n\n"
+        f" Jami foydalanuvchilar: {users}\n"
+        f" Telegram obunachilari: {subs}\n"
+        f" Instagram tasdiqlari: {insta}\n"
+        f" Jami ovozlar: {votes}\n"
+        f" Ovoz berganlar: {voters}\n"
+        f" Jami referral: {referrals}\n"
+        f" Ishlatilmagan bonus: {bonus}\n\n"
+        f" Konkurs: <b>{'FAOL' if contest_active() else 'YAKUNLANGAN'}</b>\n"
+        f" Davomiyligi: {contest_days()} kun\n"
+        f" Tugash: {fmt_dt(contest_end())}\n"
+        f" Qolgan: {time_left_text()}",
         admin_keyboard(),
     )
-
-
 async def admin_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not await _admin_only(query):
         return
-    await edit(query, leaderboard_text("🏆 KONKURS NATIJALARI"), admin_keyboard())
-
-
+    await edit(query, leaderboard_text(" KONKURS NATIJALARI"), admin_keyboard())
 async def admin_voters(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not await _admin_only(query):
         return
-
     voters = fetchall("""
         SELECT votes.vote_id, votes.user_id, votes.candidate, votes.vote_type,
                votes.created_at, users.first_name, users.username
         FROM votes LEFT JOIN users ON users.user_id = votes.user_id
         ORDER BY votes.vote_id DESC LIMIT 15
     """)
-
     if not voters:
-        text = "👥 <b>OVOZ BERGANLAR</b>\n\nHozircha hech kim ovoz bermagan."
+        text = " <b>OVOZ BERGANLAR</b>\n\nHozircha hech kim ovoz bermagan."
     else:
-        text = "👥 <b>OVOZ BERGANLAR</b>\nOxirgi 15 ta ovoz:\n\n"
+        text = " <b>OVOZ BERGANLAR</b>\nOxirgi 15 ta ovoz:\n\n"
         for i, r in enumerate(voters, 1):
             try:
-                date_text = datetime.fromisoformat(r["created_at"]).strftime("%d.%m %H:%M:%S")
+                date_text = fmt_dt(datetime.fromisoformat(r["created_at"]), "%d.%m %H:%M:%S")
             except Exception:
                 date_text = r["created_at"]
             username = f"@{esc(r['username'])}" if r["username"] else "username yo‘q"
             text += (
-                f"{i}. 👤 {esc(r['first_name'] or 'Noma’lum')} ({username})\n"
-                f"   🆔 <code>{r['user_id']}</code> • 🕐 {date_text}\n"
-                f"   🗳 {esc(r['candidate'])} • {r['vote_type']}\n\n"
+                f"{i}.  {esc(r['first_name'] or 'Noma’lum')} ({username})\n"
+                f"    <code>{r['user_id']}</code> •  {date_text}\n"
+                f"   
             )
-
+ {esc(r['candidate'])} • {r['vote_type']}\n\n"
     await edit(query, text, admin_keyboard())
-
-
 async def admin_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not await _admin_only(query):
         return
-
     rows = fetchall("""
         SELECT user_id, first_name, username, referral_count, points, bonus_votes
         FROM users WHERE referral_count > 0
         ORDER BY referral_count DESC LIMIT 20
     """)
-
-    text = "🎁 <b>REFERRAL STATISTIKASI</b>\n\n"
+    text = " <b>REFERRAL STATISTIKASI</b>\n\n"
     if not rows:
         text += "Hozircha referral mavjud emas."
     for i, r in enumerate(rows, 1):
         username = f"@{esc(r['username'])}" if r["username"] else "username yo‘q"
         text += (
             f"{i}. <b>{esc(r['first_name'] or 'Noma’lum')}</b> ({username})\n"
-            f"   🆔 <code>{r['user_id']}</code>\n"
-            f"   👥 {r['referral_count']} • ⭐ {r['points']} • 🎁 {r['bonus_votes']}\n\n"
+            f"    <code>{r['user_id']}</code>\n"
+            f"   
         )
-
+ {r['referral_count']} •  {r['points']} •  {r['bonus_votes']}\n\n"
     await edit(query, text, admin_keyboard())
-
-
 # =========================================================
 # BROADCAST
 # =========================================================
-
 async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not await _admin_only(query):
         return
-
     context.user_data["awaiting_broadcast"] = True
     await edit(
         query,
-        "📢 <b>BARCHAGA XABAR YUBORISH</b>\n\n"
+        "
+ <b>BARCHAGA XABAR YUBORISH</b>\n\n"
         "Yubormoqchi bo‘lgan xabaringizni shu yerga yuboring.\n"
         "Matn, rasm, video yoki boshqa Telegram xabarlarini yuborishingiz mumkin.\n\n"
-        "❌ Bekor qilish uchun /cancel buyrug‘ini yuboring.",
+        "
+ Bekor qilish uchun /cancel buyrug‘ini yuboring.",
     )
-
-
 async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
-
     context.user_data.pop("awaiting_broadcast", None)
     await update.message.reply_text(
-        "❌ <b>Broadcast bekor qilindi.</b>",
+        "
+ <b>Broadcast bekor qilindi.</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_keyboard(),
     )
-
-
 async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     if not context.user_data.get("awaiting_broadcast"):
         return
-
     message = update.message
     if not message:
         return
-
     context.user_data.pop("awaiting_broadcast", None)
-
     users = fetchall("SELECT user_id FROM users ORDER BY user_id")
     total = len(users)
     success = 0
     failed = 0
-
     status_message = await message.reply_text(
-        "⏳ <b>Xabar yuborilmoqda...</b>\n\n"
-        f"👥 Jami foydalanuvchilar: <b>{total}</b>",
+        " <b>Xabar yuborilmoqda...</b>\n\n"
+        f" Jami foydalanuvchilar: <b>{total}</b>",
         parse_mode=ParseMode.HTML,
     )
-
     for row in users:
         user_id = row["user_id"]
         try:
@@ -1177,32 +1010,28 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             failed += 1
             log.warning("Broadcast %s ID ga yuborilmadi: %s", user_id, e)
-
     await status_message.edit_text(
-        "📢 <b>BROADCAST YAKUNLANDI</b>\n"
+        "
+ <b>BROADCAST YAKUNLANDI</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        f"👥 Jami: <b>{total}</b>\n"
-        f"✅ Yetkazildi: <b>{success}</b>\n"
-        f"❌ Yetkazilmadi: <b>{failed}</b>\n\n"
+        f" Jami: <b>{total}</b>\n"
+        f" Yetkazildi: <b>{success}</b>\n"
+        f" Yetkazilmadi: <b>{failed}</b>\n\n"
         "Admin panelga qaytishingiz mumkin.",
         parse_mode=ParseMode.HTML,
         reply_markup=admin_keyboard(),
     )
-
-
 # =========================================================
 # ADMIN BUYRUQLARI
 # =========================================================
-
 async def restorevotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /restorevotes USER_ID NOMZOD_RAQAMI OVOZ_SONI
+    /restorevotes USER_ID MAKTAB_RAQAMI OVOZ_SONI
     Masalan: /restorevotes 123456789 1 5
     """
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Sizda admin huquqi mavjud emas.")
+        await update.message.reply_text(" Sizda admin huquqi mavjud emas.")
         return
-
     try:
         user_id = int(context.args[0])
         candidate_index = int(context.args[1]) - 1
@@ -1212,20 +1041,19 @@ async def restorevotes_command(update: Update, context: ContextTypes.DEFAULT_TYP
         candidate = CANDIDATES[candidate_index]
     except (IndexError, ValueError):
         await update.message.reply_text(
-            "❌ Buyruq noto‘g‘ri.\n\n"
+            "
+ Buyruq noto‘g‘ri.\n\n"
             "Foydalanish:\n"
-            "/restorevotes USER_ID NOMZOD_RAQAMI OVOZ_SONI\n\n"
+            "/restorevotes USER_ID MAKTAB_RAQAMI OVOZ_SONI\n\n"
             "Masalan:\n"
             "/restorevotes 123456789 1 5\n\n"
-            "Nomzodlar:\n"
+            "Maktablar:\n"
             + "\n".join(f"{i}. {name}" for i, name in enumerate(CANDIDATES, 1))
         )
         return
-
     if not get_user(user_id):
-        await update.message.reply_text(f"❌ {user_id} ID li foydalanuvchi bazadan topilmadi.")
+        await update.message.reply_text(f" {user_id} ID li foydalanuvchi bazadan topilmadi.")
         return
-
     now = datetime.now().isoformat()
     for _ in range(count):
         execute(
@@ -1233,29 +1061,25 @@ async def restorevotes_command(update: Update, context: ContextTypes.DEFAULT_TYP
             (user_id, candidate, "admin_restore", now),
         )
     commit()
-
     total = fetchone("SELECT COUNT(*) AS n FROM votes WHERE candidate = ?", (candidate,))["n"]
-
     await update.message.reply_text(
-        "✅ <b>Ovozlar qayta tiklandi!</b>\n\n"
-        f"👤 Foydalanuvchi: <code>{user_id}</code>\n"
-        f"🏆 Nomzod: <b>{esc(candidate)}</b>\n"
-        f"➕ Tiklangan ovoz: <b>{count} ta</b>\n"
-        f"📊 Nomzodning jami ovozi: <b>{total} ta</b>\n\n"
-        "ℹ️ Bu ovozlar <code>admin_restore</code> sifatida saqlandi.",
+        " <b>Ovozlar qayta tiklandi!</b>\n\n"
+        f" Foydalanuvchi: <code>{user_id}</code>\n"
+        f" Maktab: <b>{esc(candidate)}</b>\n"
+        f" Tiklangan ovoz: <b>{count} ta</b>\n"
+        f" Maktabning jami ovozi: <b>{total} ta</b>\n\n"
+        "
+ Bu ovozlar <code>admin_restore</code> sifatida saqlandi.",
         parse_mode=ParseMode.HTML,
     )
-
-
 async def addvotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     ID siz ovoz qo'shish/tiklash (maktablar uchun).
-    /addvotes NOMZOD_RAQAMI SON SABAB
+    /addvotes MAKTAB_RAQAMI SON SABAB
     Masalan: /addvotes 3 20 Baza o'chib ketgan, ovozlar tiklandi
     """
     if not is_admin(update.effective_user.id):
         return
-
     try:
         index = int(context.args[0]) - 1
         count = int(context.args[1])
@@ -1265,17 +1089,17 @@ async def addvotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         candidate = CANDIDATES[index]
     except (IndexError, ValueError):
         await update.message.reply_text(
-            "❌ Buyruq noto‘g‘ri.\n\n"
+            "
+ Buyruq noto‘g‘ri.\n\n"
             "Foydalanish:\n"
-            "/addvotes NOMZOD_RAQAMI SON SABAB\n\n"
+            "/addvotes MAKTAB_RAQAMI SON SABAB\n\n"
             "Masalan:\n"
             "/addvotes 3 20 Baza o‘chib ketgan, ovozlar tiklandi\n\n"
             "SABAB yozish majburiy. Bir martada ko‘pi bilan 500 ta.\n\n"
-            "Nomzodlar:\n"
+            "Maktablar:\n"
             + "\n".join(f"{i}. {name}" for i, name in enumerate(CANDIDATES, 1))
         )
         return
-
     now = datetime.now().isoformat()
     for _ in range(count):
         execute(
@@ -1287,23 +1111,69 @@ async def addvotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         (candidate, count, reason, now),
     )
     commit()
-
     total = fetchone("SELECT COUNT(*) AS n FROM votes WHERE candidate = ?", (candidate,))["n"]
     await update.message.reply_text(
-        "✅ <b>Ovozlar qo‘shildi</b>\n\n"
-        f"🏫 Nomzod: <b>{esc(candidate)}</b>\n"
-        f"➕ Qo‘shildi: <b>{count} ta</b>\n"
-        f"📝 Sabab: {esc(reason)}\n"
-        f"📊 Nomzodning jami ovozi: <b>{total} ta</b>",
+        " <b>Ovozlar qo‘shildi</b>\n\n"
+        f" Maktab: <b>{esc(candidate)}</b>\n"
+        f" Qo‘shildi: <b>{count} ta</b>\n"
+        f" Sabab: {esc(reason)}\n"
+        f" Maktabning jami ovozi: <b>{total} ta</b>",
         parse_mode=ParseMode.HTML,
     )
-
-
+async def voters_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Ovoz berganlarning to'liq ro'yxati (CSV fayl).
+    /voters        — barcha ovozlar
+    /voters 3      — faqat 3-maktabga berilgan ovozlar
+    """
+    if not is_admin(update.effective_user.id):
+        return
+    sql = """
+        SELECT votes.vote_id, votes.created_at, votes.user_id, users.first_name,
+               users.username, votes.candidate, votes.vote_type
+        FROM votes LEFT JOIN users ON users.user_id = votes.user_id
+    """
+    params = ()
+    title = "barcha_ovozlar"
+    if context.args:
+        try:
+            candidate = CANDIDATES[int(context.args[0]) - 1]
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                "Ishlatilishi: /voters yoki /voters MAKTAB_RAQAMI\n\nMaktablar:\n"
+                + "\n".join(f"{i}. {name}" for i, name in enumerate(CANDIDATES, 1))
+            )
+            return
+        sql += " WHERE votes.candidate = ?"
+        params = (candidate,)
+        title = candidate.replace(" ", "_")
+    sql += " ORDER BY votes.vote_id"
+    rows = fetchall(sql, params)
+    if not rows:
+        await update.message.reply_text("Ovozlar topilmadi.")
+        return
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["№", "Vaqt", "User ID", "Ism", "Username", "Maktab", "Ovoz turi"])
+    for r in rows:
+        try:
+            when = fmt_dt(datetime.fromisoformat(r["created_at"]), "%d.%m.%Y %H:%M:%S")
+        except Exception:
+            when = r["created_at"]
+        writer.writerow([
+            r["vote_id"], when, r["user_id"], r["first_name"] or "",
+            f"@{r['username']}" if r["username"] else "", r["candidate"], r["vote_type"],
+        ])
+    data = io.BytesIO(buffer.getvalue().encode("utf-8-sig"))  # Excel uchun BOM
+    data.name = f"ovozlar_{title}.csv"
+    await update.message.reply_document(
+        document=data,
+        caption=f" Jami: {len(rows)} ta ovoz",
+    )
 async def adminlog_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin qo'shgan barcha ovozlar ro'yxati."""
     if not is_admin(update.effective_user.id):
         return
-
     rows = fetchall(
         "SELECT candidate, amount, reason, created_at FROM admin_log ORDER BY log_id DESC LIMIT 20"
     )
@@ -1311,24 +1181,19 @@ async def adminlog_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "SELECT candidate, COUNT(*) AS n FROM votes WHERE vote_type = 'admin_restore' "
         "GROUP BY candidate ORDER BY n DESC"
     )
-
     if not rows and not per:
         await update.message.reply_text("Admin qo‘shgan ovozlar yo‘q.")
         return
-
-    text = "📝 <b>ADMIN QO‘SHGAN OVOZLAR</b>\n\n<b>Maktablar bo‘yicha jami:</b>\n"
+    text = " <b>ADMIN QO‘SHGAN OVOZLAR</b>\n\n<b>Maktablar bo‘yicha jami:</b>\n"
     text += "\n".join(f"• {esc(r['candidate'])}: {r['n']} ta" for r in per) or "—"
     text += "\n\n<b>Oxirgi amallar:</b>\n"
     for r in rows:
         try:
-            when = datetime.fromisoformat(r["created_at"]).strftime("%d.%m %H:%M")
+            when = fmt_dt(datetime.fromisoformat(r["created_at"]))
         except Exception:
             when = r["created_at"]
         text += f"• {when} — {esc(r['candidate'])} +{r['amount']} ({esc(r['reason'])})\n"
-
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
-
-
 async def setdays_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -1341,11 +1206,9 @@ async def setdays_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     set_setting("contest_days", str(days))
     await update.message.reply_text(
-        f"✅ Konkurs davomiyligi {days} kunga o‘rnatildi.\n"
-        f"⏱ Tugash: {contest_end().strftime('%d.%m.%Y %H:%M')}"
+        f" Konkurs davomiyligi {days} kunga o‘rnatildi.\n"
+        f" Tugash: {fmt_dt(contest_end())}"
     )
-
-
 async def extend_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -1358,11 +1221,55 @@ async def extend_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     set_setting("contest_days", str(contest_days() + days))
     await update.message.reply_text(
-        f"✅ Konkurs {days} kunga uzaytirildi.\n"
-        f"⏱ Yangi tugash: {contest_end().strftime('%d.%m.%Y %H:%M')}"
+        f" Konkurs {days} kunga uzaytirildi.\n"
+        f" Yangi tugash: {fmt_dt(contest_end())}"
     )
-
-
+async def setend_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Aniq tugash vaqtini belgilash (O'zbekiston vaqti bilan).
+    /setend 19:00           — bugun soat 19:00 da
+    /setend 04.11 19:00     — 4-noyabr soat 19:00 da
+    """
+    if not is_admin(update.effective_user.id):
+        return
+    usage = (
+        "Ishlatilishi:\n"
+        "/setend 19:00 — bugun soat 19:00 da\n"
+        "/setend 04.11 19:00 — 4-noyabr soat 19:00 da"
+    )
+    try:
+        local_now = now_local()
+        if len(context.args) == 1:
+            hh, mm = context.args[0].split(":")
+            target = local_now.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+        elif len(context.args) == 2:
+            day, month = context.args[0].split(".")
+            hh, mm = context.args[1].split(":")
+            target = local_now.replace(
+                month=int(month), day=int(day), hour=int(hh), minute=int(mm),
+                second=0, microsecond=0,
+            )
+        else:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(usage)
+        return
+    target_server = from_local(target)
+    if target_server <= datetime.now():
+        await update.message.reply_text(
+            f" {target.strftime('%d.%m.%Y %H:%M')} o‘tib ketgan.\n"
+            f"Hozir: {local_now.strftime('%d.%m.%Y %H:%M')}\n\n" + usage
+        )
+        return
+    base = contest_start() + timedelta(days=contest_days())
+    minutes = int((target_server - base).total_seconds() // 60)
+    set_setting("contest_extra_minutes", str(minutes))
+    await update.message.reply_text(
+        f" Tugash vaqti belgilandi.\n"
+        f" Hozir: {local_now.strftime('%d.%m.%Y %H:%M')}\n"
+        f" Tugash: {fmt_dt(contest_end())}\n"
+        f" Qolgan: {time_left_text()}"
+    )
 async def extendhours_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/extendhours 6 — konkursni 6 soatga uzaytiradi."""
     if not is_admin(update.effective_user.id):
@@ -1374,14 +1281,31 @@ async def extendhours_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     except (IndexError, ValueError):
         await update.message.reply_text("Ishlatilishi: /extendhours 6")
         return
-    set_setting("contest_extra_hours", str(extra_hours() + hours))
+    set_setting("contest_extra_minutes", str(extra_minutes() + hours * 60))
     await update.message.reply_text(
-        f"✅ Konkurs {hours} soatga uzaytirildi.\n"
-        f"⏱ Yangi tugash: {contest_end().strftime('%d.%m.%Y %H:%M')}\n"
-        f"⏳ Qolgan: {time_left_text()}"
+        f" Konkurs {hours} soatga uzaytirildi.\n"
+        f" Yangi tugash: {fmt_dt(contest_end())}\n"
+        f" Qolgan: {time_left_text()}"
     )
-
-
+async def cuthours_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/cuthours 6 — konkurs tugash vaqtini 6 soat oldinga suradi (qisqartiradi)."""
+    if not is_admin(update.effective_user.id):
+        return
+    try:
+        hours = int(context.args[0])
+        if hours < 1:
+            raise ValueError
+    except (IndexError, ValueError):
+        await update.message.reply_text("Ishlatilishi: /cuthours 6")
+        return
+    set_setting("contest_extra_minutes", str(extra_minutes() - hours * 60))
+    status = "FAOL" if contest_active() else "YAKUNLANGAN"
+    await update.message.reply_text(
+        f" Konkurs {hours} soatga qisqartirildi.\n"
+        f" Yangi tugash: {fmt_dt(contest_end())}\n"
+        f" Qolgan: {time_left_text()}\n"
+        f" Holati: {status}"
+    )
 async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/restart  yoki  /restart 15  (15 kunga qayta boshlash)"""
     if not is_admin(update.effective_user.id):
@@ -1396,25 +1320,22 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Ishlatilishi: /restart 15")
             return
     set_setting("contest_start", datetime.now().isoformat())
-    set_setting("contest_extra_hours", "0")
+    set_setting("contest_extra_minutes", "0")
     await update.message.reply_text(
-        f"🔄 Konkurs hozirdan qayta boshlandi ({contest_days()} kun).\n"
-        f"⏱ Tugash: {contest_end().strftime('%d.%m.%Y %H:%M')}"
+        f" Konkurs hozirdan qayta boshlandi ({contest_days()} kun).\n"
+        f" Tugash: {fmt_dt(contest_end())}"
     )
-
-
 async def resetvotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Hammasini noldan boshlash: ovozlar, referrallar, bonuslar o'chadi."""
     if not is_admin(update.effective_user.id):
         return
-
     if not context.args or context.args[0] != "tasdiq":
         await update.message.reply_text(
-            "⚠️ Bu BARCHA ovozlar va referrallarni o‘chiradi.\n"
+            "
+ Bu BARCHA ovozlar va referrallarni o‘chiradi.\n"
             "Tasdiqlash uchun: /resetvotes tasdiq"
         )
         return
-
     try:
         execute("DELETE FROM votes")
         execute("DELETE FROM referral_done")
@@ -1423,25 +1344,21 @@ async def resetvotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "bonus_granted = 0, referral_count = 0, points = 0"
         )
         commit()
-        await update.message.reply_text("✅ Hammasi nolga tushirildi. Har kimda yana 1 ta ovoz bor.")
+        await update.message.reply_text(" Hammasi nolga tushirildi. Har kimda yana 1 ta ovoz bor.")
     except Exception as e:
-        await update.message.reply_text(f"❌ Xato: {e}")
-
-
+        await update.message.reply_text(f" Xato: {e}")
 async def newround_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Eski ovozlar reytingda qoladi, hammaga yangi 1 ta asosiy ovoz beriladi."""
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Siz admin emassiz.")
+        await update.message.reply_text(" Siz admin emassiz.")
         return
     try:
         execute("UPDATE users SET main_vote_used = 0")
         commit()
         n = fetchone("SELECT COUNT(*) AS n FROM users WHERE main_vote_used = 0")["n"]
-        await update.message.reply_text(f"✅ {n} ta foydalanuvchiga yangi ovoz berildi.")
+        await update.message.reply_text(f" {n} ta foydalanuvchiga yangi ovoz berildi.")
     except Exception as e:
-        await update.message.reply_text(f"❌ Xato: {e}")
-
-
+        await update.message.reply_text(f" Xato: {e}")
 async def myinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Tekshiruv uchun: o'z holatingizni ko'rsatadi."""
     row = get_user(update.effective_user.id)
@@ -1459,31 +1376,24 @@ async def myinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"qolgan vaqt: {time_left_text()}\n"
         f"baza: {DB_KIND}"
     )
-
-
 async def timeleft_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"⏳ Konkursning qolgan vaqti: {time_left_text()}")
-
-
+    await update.message.reply_text(f" Konkursning qolgan vaqti: {time_left_text()}")
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "ℹ️ YORDAM\n\n"
+        "
+ YORDAM\n\n"
         "/start — konkursni boshlash\n"
         "/referral — referral havolangiz\n"
         "/timeleft — konkursning qolgan vaqti\n"
         "/help — yordam\n\n"
         "Muammo bo‘lsa administratorga murojaat qiling."
     )
-
-
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     log.error("BOT ERROR: %r", context.error, exc_info=context.error)
     try:
         db.rollback()
     except Exception:
         pass
-
-
 async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("start", "Konkursni boshlash"),
@@ -1491,21 +1401,16 @@ async def post_init(application: Application):
         BotCommand("timeleft", "Qolgan vaqt"),
         BotCommand("help", "Yordam"),
     ])
-
-
 # =========================================================
 # MAIN
 # =========================================================
-
 def main():
     # Python 3.14 da event loop avtomatik yaratilmaydi.
     try:
         asyncio.get_event_loop()
     except RuntimeError:
         asyncio.set_event_loop(asyncio.new_event_loop())
-
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
-
     for name, handler in [
         ("start", start),
         ("referral", referral_command),
@@ -1517,18 +1422,19 @@ def main():
         ("restorevotes", restorevotes_command),
         ("addvotes", addvotes_command),
         ("adminlog", adminlog_command),
+        ("voters", voters_command),
         ("extend", extend_command),
         ("extendhours", extendhours_command),
+        ("setend", setend_command),
+        ("cuthours", cuthours_command),
         ("restart", restart_command),
         ("resetvotes", resetvotes_command),
         ("newround", newround_command),
         ("cancel", cancel_broadcast),
     ]:
         app.add_handler(CommandHandler(name, handler))
-
     # Faqat admin broadcast rejimida yuborgan oddiy xabarlarni qabul qiladi.
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, broadcast_message))
-
     for pattern, handler in [
         (r"^check_subscription$", check_subscription),
         (r"^ig_done_\d+$", instagram_done),
@@ -1547,12 +1453,8 @@ def main():
         (r"^admin_broadcast$", admin_broadcast),
     ]:
         app.add_handler(CallbackQueryHandler(handler, pattern=pattern))
-
     app.add_error_handler(error_handler)
-
     log.info("IMPERIYA KONKURS BOT ISHLAYAPTI | DB=%s | %s kun", DB_KIND, contest_days())
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
 if __name__ == "__main__":
     main()
