@@ -13,6 +13,7 @@ import io
 import html
 import logging
 import os
+import random
 import sqlite3
 import threading
 import time
@@ -201,6 +202,7 @@ def init_database():
                 bonus_votes INTEGER DEFAULT 0,
                 bonus_granted INTEGER DEFAULT 0,
                 main_vote_used INTEGER DEFAULT 0,
+                captcha_passed INTEGER DEFAULT 0,
                 created_at TEXT
             )
             """,
@@ -243,6 +245,12 @@ def init_database():
             )
         except Exception as e:
             log.warning("ALTER TABLE o‘tkazib yuborildi: %s", e)
+        try:
+            cursor.execute(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS captcha_passed INTEGER DEFAULT 0"
+            )
+        except Exception as e:
+            log.warning("captcha ustuni qo‘shilmadi: %s", e)
     else:
         cursor.executescript("""
             CREATE TABLE IF NOT EXISTS users (
@@ -257,6 +265,7 @@ def init_database():
                 bonus_votes INTEGER DEFAULT 0,
                 bonus_granted INTEGER DEFAULT 0,
                 main_vote_used INTEGER DEFAULT 0,
+                captcha_passed INTEGER DEFAULT 0,
                 created_at TEXT
             );
             CREATE TABLE IF NOT EXISTS votes (
@@ -289,6 +298,8 @@ def init_database():
                 "UPDATE users SET bonus_granted = points / ?",
                 (REFERRALS_PER_BONUS,),
             )
+        if "captcha_passed" not in cols:
+            cursor.execute("ALTER TABLE users ADD COLUMN captcha_passed INTEGER DEFAULT 0")
     commit()
 
 
@@ -480,6 +491,36 @@ def requirements_keyboard():
         ],
         [InlineKeyboardButton("✅ Obunalarni tekshirish", callback_data="check_subscription")],
     ])
+
+
+CAPTCHA_EMOJIS = ["🍎", "🚗", "🏠", "⚽", "🌳", "📚", "🐱", "☀️", "🎈", "🍕"]
+
+
+def captcha_view(context):
+    """Tasodifiy captcha: emoji tanlash yoki oddiy misol. Javob user_data ga yoziladi."""
+    if random.random() < 0.5:
+        target = random.choice(CAPTCHA_EMOJIS)
+        options = random.sample([e for e in CAPTCHA_EMOJIS if e != target], 5) + [target]
+        question = f"{target} belgisini toping va shu tugmani bosing."
+        answer = target
+    else:
+        a, b = random.randint(1, 9), random.randint(1, 9)
+        answer_num = a + b
+        wrong = random.sample([n for n in range(2, 19) if n != answer_num], 5)
+        options = [str(n) for n in wrong] + [str(answer_num)]
+        question = f"{a} + {b} = ?"
+        answer = str(answer_num)
+
+    random.shuffle(options)
+    context.user_data["captcha_answer"] = answer
+
+    buttons = [InlineKeyboardButton(o, callback_data=f"cap_{o}") for o in options]
+    keyboard = InlineKeyboardMarkup([buttons[i:i + 3] for i in range(0, len(buttons), 3)])
+    text = (
+        "🤖 <b>ROBOT EMASLIGINGIZNI TASDIQLANG</b>\n\n"
+        f"{question}"
+    )
+    return text, keyboard
 
 
 def instagram_step_view(step: int):
@@ -794,7 +835,28 @@ async def _guard(query, context) -> bool:
         context.user_data["ig_shown"] = time.time()
         await edit(query, text, keyboard)
         return False
+    if row["captcha_passed"] != 1:
+        text, keyboard = captcha_view(context)
+        await edit(query, text, keyboard)
+        return False
     return True
+
+
+async def captcha_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    chosen = query.data[len("cap_"):]
+    expected = context.user_data.get("captcha_answer")
+
+    if expected is not None and chosen == expected:
+        context.user_data.pop("captcha_answer", None)
+        execute("UPDATE users SET captcha_passed = 1 WHERE user_id = ?", (query.from_user.id,))
+        commit()
+        await show_candidates(update, context)
+        return
+
+    await query.answer("❌ Noto‘g‘ri javob. Qayta urinib ko‘ring.", show_alert=True)
+    text, keyboard = captcha_view(context)
+    await edit(query, text, keyboard)
 
 
 async def show_candidates(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1611,6 +1673,7 @@ async def myinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"subscribed: {row['subscribed']}\n"
         f"instagram_verified: {row['instagram_verified']}\n"
         f"main_vote_used: {row['main_vote_used']}\n"
+        f"captcha_passed: {row['captcha_passed']}\n"
         f"bonus_votes: {row['bonus_votes']}\n"
         f"konkurs faol: {contest_active()}\n"
         f"qolgan vaqt: {time_left_text()}\n"
@@ -1692,6 +1755,7 @@ def main():
     for pattern, handler in [
         (r"^check_subscription$", check_subscription),
         (r"^ig_done_\d+$", instagram_done),
+        (r"^cap_.+$", captcha_answer),
         (r"^show_candidates$", show_candidates),
         (r"^vote_\d+$", vote_select),
         (r"^confirm_\d+$", vote_confirm),
